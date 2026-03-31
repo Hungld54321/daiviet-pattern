@@ -1,0 +1,31 @@
+# Large model checkpoints (intermediate, not needed)
+lora_checkpoints/
+
+# Large evaluation model (standard download)
+inception-2015-12-05.pt
+
+# Database & logs
+daiviet_platform/daiviet.db
+daiviet_platform/api.log
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# macOS metadata
+._*
+.DS_Store
+
+# Claude config
+.claude/
+
+# Virtual environments
+venv/
+.env/
+env/

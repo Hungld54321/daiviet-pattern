@@ -1,0 +1,73 @@
+==============================================================
+DaiViet LoRA -- Evaluation Report
+==============================================================
+
+LoRA generated images: 20
+Real matched subset  : 20 (5 per period)
+
+--------------------------------------------------------------
+STEP 1 -- Generating baseline (SDXL, no LoRA) ...
+--------------------------------------------------------------
+  Baseline images saved to D:\Hoavandaiviet\eval_tmp\baseline_flat  (20 files)
+
+--------------------------------------------------------------
+STEP 2 -- FID (clean-fid, mode=clean)
+  Note: FID computed on 20 real vs 20 generated.
+  Standard FID needs >=2048; scores here are indicative.
+--------------------------------------------------------------
+  FID (SDXL + LoRA, ours) : 336.07
+  FID (SDXL baseline)     : 368.06
+
+--------------------------------------------------------------
+STEP 3 -- SSIM (generated vs period-matched real)
+--------------------------------------------------------------
+  SSIM (SDXL + LoRA, ours) : 0.1113  (std 0.0869)
+  SSIM (SDXL baseline)     : 0.1255  (std 0.0644)
+
+--------------------------------------------------------------
+STEP 4 -- CLIP Score (open_clip ViT-B/32)
+--------------------------------------------------------------
+  CLIP Score (SDXL + LoRA, ours) : 0.3135  (std 0.0165)
+  CLIP Score (SDXL baseline)     : 0.2888  (std 0.0164)
+
+--------------------------------------------------------------
+STEP 5 -- Per-period CLIP Score breakdown (LoRA)
+--------------------------------------------------------------
+  Dong-Son     : 0.2932
+  Ly-Tran      : 0.3119
+  Le           : 0.3234
+  Nguyen       : 0.3255
+
+--------------------------------------------------------------
+STEP 6 -- Training loss statistics (from train_full.log)
+--------------------------------------------------------------
+  Epoch    Avg Diff Loss      Avg Cult Loss
+  -------- ------------------ --------------
+  1        0.0535             0.000100
+  10       0.0519             0.000100
+  25       0.0483             0.000100
+  50       0.0502             0.000100
+
+  Initial diff loss (step 50) : 0.0219
+  Final  diff loss (step 3850): 0.0477
+  Min diff loss               : 0.0035
+  Total log steps             : 77
+
+==============================================================
+RESULTS TABLE (for paper)
+==============================================================
+
+Method                       |     FID |    SSIM |    CLIP
+-----------------------------+---------+---------+--------
+SDXL (no LoRA)               |  368.06 |  0.1255 |  0.2888
+SDXL + LoRA (ours)           |  336.07 |  0.1113 |  0.3135
+
+  FID  improvement  (LoRA vs base): +32.00  (better)
+  SSIM improvement  (LoRA vs base): -0.0142  (worse)
+  CLIP improvement  (LoRA vs base): +0.0247  (better)
+
+Notes:
+  FID computed on 20 generated vs 20 matched real images.
+  High variance expected at this scale; treat as indicative.
+  SSIM: best-match within period (5 real candidates per period).
+  CLIP: ViT-B/32, cosine similarity to generation prompt.

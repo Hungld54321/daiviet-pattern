@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: daiviet_postgres
+    environment:
+      POSTGRES_USER: daiviet
+      POSTGRES_PASSWORD: daiviet2026
+      POSTGRES_DB: daiviet_pattern
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U daiviet -d daiviet_pattern"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: daiviet_api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://daiviet:daiviet2026@postgres:5432/daiviet_pattern
+      DATASET_DIR: /app/dataset
+      MANIFEST_CSV: /app/dataset_manifest.csv
+    ports:
+      - "8000:8000"
+    volumes:
+      - D:/Hoavandaiviet/dataset:/app/dataset
+      - D:/Hoavandaiviet/dataset_manifest.csv:/app/dataset_manifest.csv
+      - D:/Hoavandaiviet/lora_output:/app/lora_output
+      - D:/Hoavandaiviet/generated:/app/generated
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:

@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hoa văn Đại Việt</title>
+<style>
+  :root {
+    --gold:   #c8922a;
+    --red:    #9b2335;
+    --dark:   #1a1207;
+    --panel:  #fdf6e3;
+    --border: #e2cfa0;
+    --radius: 10px;
+    --shadow: 0 2px 12px rgba(0,0,0,0.10);
+
+    --co-dai:  #b8860b;
+    --ly-tran: #2e7d4f;
+    --le:      #1a5276;
+    --moi:     #6d4c41;
+    --nguyen:  #7b241c;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #f5efe0;
+    color: #2c1a00;
+    min-height: 100vh;
+  }
+
+  /* ── header ── */
+  header {
+    background: linear-gradient(135deg, var(--dark) 0%, #3b2205 100%);
+    color: #f5dfa0;
+    padding: 18px 32px;
+    display: flex; align-items: center; gap: 18px;
+    box-shadow: 0 3px 16px rgba(0,0,0,0.4);
+  }
+  header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: .03em; }
+  header .sub { font-size: .85rem; opacity: .75; margin-top: 2px; }
+  .stats-pill {
+    margin-left: auto;
+    background: rgba(255,255,255,.12);
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-size: .82rem;
+    display: flex; gap: 18px;
+  }
+  .stats-pill b { color: var(--gold); }
+
+  /* ── tabs ── */
+  nav.tabs {
+    display: flex;
+    background: var(--dark);
+    padding: 0 24px;
+    border-bottom: 3px solid var(--gold);
+  }
+  nav.tabs button {
+    background: none; border: none; cursor: pointer;
+    color: #c8b07a; padding: 13px 22px;
+    font-size: .92rem; font-weight: 600;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -3px; transition: all .2s;
+  }
+  nav.tabs button:hover  { color: #f5dfa0; }
+  nav.tabs button.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+  /* ── main layout ── */
+  main { max-width: 1380px; margin: 0 auto; padding: 28px 20px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+    box-shadow: var(--shadow);
+  }
+
+  /* ── period badges ── */
+  .period-bar { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 16px; }
+  .badge {
+    padding: 7px 18px; border-radius: 20px; font-size: .82rem; font-weight: 700;
+    border: 2px solid transparent; cursor: pointer; transition: all .18s;
+    color: #fff; user-select: none;
+  }
+  .badge:hover { filter: brightness(1.15); }
+  .badge.active { border-color: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,.35); }
+  .badge.co-dai  { background: var(--co-dai); }
+  .badge.ly-tran { background: var(--ly-tran); }
+  .badge.le      { background: var(--le); }
+  .badge.moi     { background: var(--moi); }
+  .badge.nguyen  { background: var(--nguyen); }
+
+  /* ── filter row ── */
+  .filter-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+  select, input[type=text], input[type=range] {
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 12px; font-size: .88rem;
+    background: #fff; color: #2c1a00;
+  }
+  select:focus, input[type=text]:focus { outline: 2px solid var(--gold); }
+
+  /* ── buttons ── */
+  .btn {
+    padding: 9px 22px; border-radius: 6px; border: none; cursor: pointer;
+    font-weight: 600; font-size: .88rem; transition: all .18s;
+  }
+  .btn-primary { background: var(--gold); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: #a87220; }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-secondary { background: #fff; border: 1px solid var(--border); color: #5a3e00; }
+  .btn-secondary:hover { background: #fef7e0; }
+  .btn-sm { padding: 5px 12px; font-size: .8rem; }
+  .btn-danger { background: var(--red); color: #fff; }
+
+  /* ── image grid ── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px; margin-top: 16px;
+  }
+  .card {
+    background: #fff; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+    transition: transform .18s, box-shadow .18s;
+    cursor: pointer;
+  }
+  .card:hover { transform: translateY(-3px); box-shadow: 0 6px 20px rgba(0,0,0,.14); }
+  .card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .card .card-body { padding: 8px 10px; }
+  .card .card-period { font-size: .72rem; font-weight: 700; color: var(--gold); margin-bottom: 2px; }
+  .card .card-motif  { font-size: .78rem; color: #4a3000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .card-sim    { font-size: .72rem; color: #888; margin-top: 3px; }
+
+  /* ── pagination ── */
+  .pager { display: flex; gap: 8px; align-items: center; margin-top: 18px; justify-content: center; }
+  .pager span { font-size: .85rem; color: #666; }
+
+  /* ── section titles ── */
+  h2 { font-size: 1.05rem; font-weight: 700; color: var(--red); margin-bottom: 16px; }
+  label { font-size: .85rem; font-weight: 600; color: #5a3e00; display: block; margin-bottom: 5px; }
+
+  /* ── upload zone ── */
+  .upload-zone {
+    border: 2px dashed var(--border); border-radius: 10px;
+    padding: 36px; text-align: center; cursor: pointer;
+    background: #fff; transition: border-color .2s;
+    color: #8a7050;
+  }
+  .upload-zone:hover { border-color: var(--gold); }
+  .upload-zone.dragover { border-color: var(--gold); background: #fef7e0; }
+
+  /* ── generate tab ── */
+  .gen-form { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media(max-width:700px) { .gen-form { grid-template-columns: 1fr; } }
+
+  .num-btns { display: flex; gap: 6px; }
+  .num-btn {
+    width: 38px; height: 38px; border-radius: 6px; border: 2px solid var(--border);
+    background: #fff; font-weight: 700; cursor: pointer; font-size: .95rem;
+    transition: all .15s; color: #5a3e00;
+  }
+  .num-btn.active { background: var(--gold); border-color: var(--gold); color: #fff; }
+
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 3px solid rgba(255,255,255,.4);
+    border-top-color: #fff; border-radius: 50%;
+    animation: spin .7s linear infinite; margin-right: 8px; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .status-box {
+    background: #fff8e8; border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 18px;
+    font-size: .88rem; color: #5a3e00; margin-top: 14px;
+    display: none;
+  }
+  .status-box.visible { display: block; }
+
+  .gen-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px; margin-top: 20px;
+  }
+  .gen-card {
+    background: #fff; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+  }
+  .gen-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .gen-card .gen-actions { padding: 8px 10px; display: flex; gap: 6px; }
+
+  .save-bar {
+    margin-top: 16px; padding: 14px 18px;
+    background: #eaf4ee; border: 1px solid #a5d6b0; border-radius: 8px;
+    display: none; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .save-bar.visible { display: flex; }
+  .save-bar span { font-size: .88rem; color: #2e7d4f; flex: 1; }
+
+  /* ── modal ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.7); z-index: 1000;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 12px; max-width: 620px; width: 95%;
+    max-height: 90vh; overflow-y: auto; padding: 24px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.35);
+  }
+  .modal img { width: 100%; border-radius: 8px; margin-bottom: 14px; }
+  .modal h3  { font-size: 1rem; color: var(--red); margin-bottom: 10px; }
+  .modal-close { float: right; background: none; border: none; font-size: 1.4rem; cursor: pointer; color: #888; }
+
+  /* ── misc ── */
+  .tag { display: inline-block; padding: 2px 9px; border-radius: 12px; font-size: .72rem; font-weight: 700; color: #fff; }
+  .empty { text-align: center; color: #aaa; padding: 40px; font-size: .9rem; }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+  hr.sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+  textarea {
+    width: 100%; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; font-size: .88rem; resize: vertical; font-family: inherit;
+  }
+  textarea:focus { outline: 2px solid var(--gold); }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🏛️ Hoa văn Đại Việt</h1>
+    <div class="sub">Kho dữ liệu hoa văn truyền thống Việt Nam</div>
+  </div>
+  <div class="stats-pill" id="headerStats">
+    <span>Đang tải...</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="active" onclick="switchTab('browse',this)">🖼️ Duyệt & Lọc</button>
+  <button onclick="switchTab('visearch',this)">🔍 Tìm theo ảnh</button>
+  <button onclick="switchTab('txtsearch',this)">📝 Tìm theo văn bản</button>
+  <button onclick="switchTab('generate',this)">🎨 Sinh hoa văn</button>
+</nav>
+
+<main>
+
+<!-- ══════════════════════════════════════════
+     TAB 1 — BROWSE
+     ══════════════════════════════════════════ -->
+<div id="tab-browse" class="tab-pane active">
+  <div class="panel">
+    <h2>Duyệt & Lọc hoa văn</h2>
+
+    <div class="period-bar" id="browsePerBar">
+      <button class="badge co-dai"  onclick="togglePeriod('Co-Dai',this)">🟡 Cổ đại</button>
+      <button class="badge ly-tran" onclick="togglePeriod('Ly-Tran',this)">🟢 Lý-Trần</button>
+      <button class="badge le"      onclick="togglePeriod('Le',this)">🔵 Lê</button>
+      <button class="badge moi"     onclick="togglePeriod('Moi',this)">🟤 Mới</button>
+      <button class="badge nguyen"  onclick="togglePeriod('Nguyen',this)">🔴 Nguyễn</button>
+    </div>
+
+    <div class="filter-row">
+      <select id="styleFilter" onchange="browseLoad(0)">
+        <option value="">Tất cả phong cách</option>
+        <option value="line_art">Line art</option>
+        <option value="colored">Colored</option>
+      </select>
+      <select id="multiFilter" onchange="browseLoad(0)">
+        <option value="">Đơn & đa motif</option>
+        <option value="false">Đơn motif</option>
+        <option value="true">Đa motif</option>
+      </select>
+      <select id="limitSelect" onchange="browseLoad(0)">
+        <option value="50">50 / trang</option>
+        <option value="100">100 / trang</option>
+        <option value="200">200 / trang</option>
+      </select>
+      <button class="btn btn-secondary btn-sm" onclick="clearBrowseFilters()">✕ Xoá bộ lọc</button>
+    </div>
+
+    <div id="browseCount" style="font-size:.82rem;color:#888;margin-bottom:10px;"></div>
+    <div class="grid" id="browseGrid"></div>
+    <div class="pager" id="browsePager"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     TAB 2 — VISUAL SEARCH
+     ══════════════════════════════════════════ -->
+<div id="tab-visearch" class="tab-pane">
+  <div class="panel">
+    <h2>Tìm kiếm theo ảnh (CLIP)</h2>
+    <div class="upload-zone" id="dropzone"
+         onclick="document.getElementById('imgInput').click()"
+         ondragover="event.preventDefault();this.classList.add('dragover')"
+         ondragleave="this.classList.remove('dragover')"
+         ondrop="handleDrop(event)">
+      <div style="font-size:2.5rem;margin-bottom:8px;">📎</div>
+      <div style="font-weight:600;">Kéo thả hoặc nhấn để chọn ảnh</div>
+      <div style="font-size:.8rem;margin-top:4px;opacity:.7;">PNG, JPG — tìm hoa văn tương tự</div>
+    </div>
+    <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="doVisualSearch(this.files[0])">
+    <div id="viPreview" style="margin-top:14px;display:none;">
+      <img id="viThumb" style="height:120px;border-radius:8px;border:1px solid var(--border);">
+    </div>
+    <div class="grid" id="viGrid" style="margin-top:18px;"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     TAB 3 — TEXT SEARCH
+     ══════════════════════════════════════════ -->
+<div id="tab-txtsearch" class="tab-pane">
+  <div class="panel">
+    <h2>Tìm kiếm theo văn bản (CLIP)</h2>
+    <div class="filter-row">
+      <input type="text" id="txtQuery" placeholder="vd: lotus flower Ly dynasty, geometric bronze age..."
+             style="flex:1;min-width:220px;" onkeydown="if(event.key==='Enter')doTextSearch()">
+      <button class="btn btn-primary" onclick="doTextSearch()">🔍 Tìm</button>
+    </div>
+    <div class="grid" id="txtGrid"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     TAB 4 — GENERATE
+     ══════════════════════════════════════════ -->
+<div id="tab-generate" class="tab-pane">
+  <div class="panel">
+    <h2>🎨 Sinh hoa văn bằng LoRA</h2>
+
+    <div class="gen-form">
+      <!-- LEFT: controls -->
+      <div>
+        <label>Chọn triều đại / thời kỳ <span style="color:var(--red)">*</span></label>
+        <div class="period-bar" id="genPerBar">
+          <button class="badge co-dai"  onclick="selectGenPeriod('Co-Dai',this)">🟡 Đông Sơn</button>
+          <button class="badge ly-tran" onclick="selectGenPeriod('Ly-Tran',this)">🟢 Lý-Trần</button>
+          <button class="badge le"      onclick="selectGenPeriod('Le',this)">🔵 Lê</button>
+          <button class="badge nguyen"  onclick="selectGenPeriod('Nguyen',this)">🔴 Nguyễn</button>
+        </div>
+
+        <div style="margin-top:16px;">
+          <label>Mô tả thêm <span style="opacity:.6;font-weight:400;">(tuỳ chọn)</span></label>
+          <textarea id="genPrompt" rows="3"
+            placeholder="hoa sen, bố cục tròn đối xứng, đường viền tinh tế..."></textarea>
+        </div>
+
+        <div style="margin-top:16px;">
+          <label>Số lượng ảnh</label>
+          <div class="num-btns">
+            <button class="num-btn active" onclick="setNumImages(1,this)">1</button>
+            <button class="num-btn"        onclick="setNumImages(2,this)">2</button>
+            <button class="num-btn active2" onclick="setNumImages(3,this)">3</button>
+            <button class="num-btn"        onclick="setNumImages(4,this)">4</button>
+            <button class="num-btn"        onclick="setNumImages(5,this)">5</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: advanced -->
+      <div>
+        <label>Số bước suy luận: <b id="stepsVal">30</b></label>
+        <input type="range" id="stepsSlider" min="20" max="50" value="30" style="width:100%;margin-bottom:18px;"
+               oninput="document.getElementById('stepsVal').textContent=this.value">
+
+        <label>Guidance scale: <b id="cfgVal">7.5</b></label>
+        <input type="range" id="cfgSlider" min="5" max="12" step="0.5" value="7.5" style="width:100%;margin-bottom:18px;"
+               oninput="document.getElementById('cfgVal').textContent=this.value">
+
+        <div id="pipelineStatus" style="font-size:.8rem;color:#888;margin-bottom:14px;">
+          Trạng thái model: đang kiểm tra...
+        </div>
+
+        <button class="btn btn-primary" id="genBtn" onclick="startGenerate()" disabled style="width:100%;padding:13px;">
+          🎨 Sinh hoa văn
+        </button>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-box" id="genStatus"></div>
+
+    <!-- Results -->
+    <div id="genResults" style="display:none;">
+      <hr class="sep">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+        <span style="font-weight:700;color:var(--red);">Kết quả</span>
+        <span id="genTime" style="font-size:.82rem;color:#888;"></span>
+      </div>
+      <div class="gen-grid" id="genGrid"></div>
+
+      <div class="save-bar" id="saveBar">
+        <span>💾 Lưu toàn bộ batch vào dataset để huấn luyện thêm?</span>
+        <button class="btn btn-primary btn-sm" onclick="saveAllGenerated()">💾 Lưu vào dataset</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <img id="modalImg" src="" alt="">
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody" style="font-size:.85rem;color:#555;line-height:1.7;"></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+let browsePeriod = null;
+let browseOffset = 0;
+let genPeriod    = null;
+let numImages    = 1;
+let lastGenData  = null;   // {images:[], prompt_used, period}
+let pipelineLoaded = false;
+
+// ══════════════════════════════════════════
+// TABS
+// ══════════════════════════════════════════
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'generate') pollPipelineStatus();
+}
+
+// ══════════════════════════════════════════
+// HEADER STATS
+// ══════════════════════════════════════════
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats').then(r => r.json());
+    document.getElementById('headerStats').innerHTML =
+      `<span><b>${r.total_patterns}</b> hoa văn thật</span>
+       <span><b>${r.generated_patterns}</b> AI sinh</span>`;
+  } catch(e) {
+    document.getElementById('headerStats').textContent = 'Không kết nối được API';
+  }
+}
+
+// ══════════════════════════════════════════
+// BROWSE TAB
+// ══════════════════════════════════════════
+function togglePeriod(p, btn) {
+  if (browsePeriod === p) {
+    browsePeriod = null;
+    btn.classList.remove('active');
+  } else {
+    browsePeriod = p;
+    document.querySelectorAll('#browsePerBar .badge').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  browseLoad(0);
+}
+
+function clearBrowseFilters() {
+  browsePeriod = null;
+  document.querySelectorAll('#browsePerBar .badge').forEach(b => b.classList.remove('active'));
+  document.getElementById('styleFilter').value = '';
+  document.getElementById('multiFilter').value = '';
+  browseLoad(0);
+}
+
+async function browseLoad(offset) {
+  browseOffset = offset;
+  const limit  = +document.getElementById('limitSelect').value;
+  const style  = document.getElementById('styleFilter').value;
+  const multi  = document.getElementById('multiFilter').value;
+
+  let url = `/api/patterns?limit=${limit}&offset=${offset}`;
+  if (browsePeriod) url += `&period=${encodeURIComponent(browsePeriod)}`;
+  if (style) url += `&style=${style}`;
+  if (multi !== '') url += `&multi_motif=${multi}`;
+
+  const data = await fetch(url).then(r => r.json());
+  document.getElementById('browseCount').textContent =
+    `Hiển thị ${offset+1}–${Math.min(offset+limit, data.total)} / ${data.total} hoa văn`;
+
+  renderGrid('browseGrid', data.patterns, p =>
+    `<div class="card-period">${periodLabel(p.period)}</div>
+     <div class="card-motif">${p.motif_subject || '—'}</div>`
+  );
+  renderPager('browsePager', data.total, offset, limit, browseLoad);
+}
+
+function renderGrid(elId, items, bodyFn) {
+  const el = document.getElementById(elId);
+  if (!items.length) { el.innerHTML = '<div class="empty">Không tìm thấy hoa văn nào.</div>'; return; }
+  el.innerHTML = items.map(p => `
+    <div class="card" onclick="openModal(${JSON.stringify(p).replace(/"/g,'&quot;')})">
+      <img src="${p.image_url}" loading="lazy" alt="${p.filename}"
+           onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22><rect fill=%22%23eee%22 width=%22100%22 height=%22100%22/></svg>'">
+      <div class="card-body">
+        ${bodyFn(p)}
+        ${p.similarity !== undefined ? `<div class="card-sim">Similarity: ${(p.similarity*100).toFixed(1)}%</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderPager(elId, total, offset, limit, loadFn) {
+  const el    = document.getElementById(elId);
+  const pages = Math.ceil(total / limit);
+  const cur   = Math.floor(offset / limit);
+  if (pages <= 1) { el.innerHTML = ''; return; }
+  let html = '';
+  if (cur > 0) html += `<button class="btn btn-secondary btn-sm" onclick="${loadFn.name}(${(cur-1)*limit})">← Trước</button>`;
+  html += `<span>Trang ${cur+1} / ${pages}</span>`;
+  if (cur < pages-1) html += `<button class="btn btn-secondary btn-sm" onclick="${loadFn.name}(${(cur+1)*limit})">Sau →</button>`;
+  el.innerHTML = html;
+}
+
+// ══════════════════════════════════════════
+// VISUAL SEARCH
+// ══════════════════════════════════════════
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropzone').classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) doVisualSearch(file);
+}
+
+async function doVisualSearch(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  document.getElementById('viThumb').src = url;
+  document.getElementById('viPreview').style.display = 'block';
+  document.getElementById('viGrid').innerHTML = '<div class="empty">Đang tìm kiếm...</div>';
+
+  const fd = new FormData();
+  fd.append('file', file);
+  const data = await fetch('/api/search/image?top_k=24', {method:'POST', body:fd}).then(r=>r.json());
+  renderGrid('viGrid', data.results, p =>
+    `<div class="card-period">${periodLabel(p.period)}</div>
+     <div class="card-motif">${p.motif_subject||'—'}</div>`
+  );
+}
+
+// ══════════════════════════════════════════
+// TEXT SEARCH
+// ══════════════════════════════════════════
+async function doTextSearch() {
+  const q = document.getElementById('txtQuery').value.trim();
+  if (!q) return;
+  document.getElementById('txtGrid').innerHTML = '<div class="empty">Đang tìm kiếm...</div>';
+  const data = await fetch('/api/search/text', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({query: q, top_k: 24}),
+  }).then(r => r.json());
+  renderGrid('txtGrid', data.results, p =>
+    `<div class="card-period">${periodLabel(p.period)}</div>
+     <div class="card-motif">${p.motif_subject||'—'}</div>`
+  );
+}
+
+// ══════════════════════════════════════════
+// GENERATE TAB
+// ══════════════════════════════════════════
+function selectGenPeriod(p, btn) {
+  genPeriod = p;
+  document.querySelectorAll('#genPerBar .badge').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('genBtn').disabled = false;
+}
+
+function setNumImages(n, btn) {
+  numImages = n;
+  document.querySelectorAll('.num-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+async function pollPipelineStatus() {
+  try {
+    const s = await fetch('/api/generate/status').then(r => r.json());
+    pipelineLoaded = s.loaded;
+    const el = document.getElementById('pipelineStatus');
+    if (s.loaded) {
+      el.innerHTML = `<span style="color:#2e7d4f">✔ Model đã tải — ${s.device.toUpperCase()}, ${s.vram_used_gb} GB VRAM</span>`;
+    } else {
+      el.innerHTML = `<span style="color:#c8922a">⏳ Model chưa tải — sẽ tải khi sinh lần đầu (~30s)</span>`;
+    }
+  } catch(e) {
+    document.getElementById('pipelineStatus').textContent = 'Không kết nối API';
+  }
+}
+
+async function startGenerate() {
+  if (!genPeriod) return;
+  const prompt = document.getElementById('genPrompt').value.trim();
+  const steps  = +document.getElementById('stepsSlider').value;
+  const cfg    = +document.getElementById('cfgSlider').value;
+
+  const statusEl  = document.getElementById('genStatus');
+  const resultsEl = document.getElementById('genResults');
+  const genBtn    = document.getElementById('genBtn');
+
+  genBtn.disabled = true;
+  resultsEl.style.display = 'none';
+  document.getElementById('saveBar').classList.remove('visible');
+  statusEl.classList.add('visible');
+  statusEl.innerHTML = pipelineLoaded
+    ? '<span class="spinner"></span> Đang sinh hoa văn...'
+    : '<span class="spinner"></span> Đang tải model lần đầu (~30 giây)...';
+
+  // Poll status while waiting
+  const poll = setInterval(async () => {
+    const s = await fetch('/api/generate/status').then(r=>r.json()).catch(()=>null);
+    if (s && s.loaded && !pipelineLoaded) {
+      pipelineLoaded = true;
+      statusEl.innerHTML = '<span class="spinner"></span> Đang sinh hoa văn...';
+      document.getElementById('pipelineStatus').innerHTML =
+        `<span style="color:#2e7d4f">✔ Model đã tải</span>`;
+    }
+  }, 2000);
+
+  try {
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        prompt: prompt, period: genPeriod,
+        num_images: numImages, num_steps: steps, guidance_scale: cfg,
+      }),
+    }).then(r => r.json());
+
+    clearInterval(poll);
+    statusEl.classList.remove('visible');
+    pipelineLoaded = true;
+    pollPipelineStatus();
+
+    // Store for save
+    lastGenData = {images: res.images, prompt_used: res.prompt_used, period: genPeriod};
+
+    // Render
+    document.getElementById('genTime').textContent =
+      `Thời gian: ${res.generation_time_sec}s  |  Prompt: "${res.prompt_used}"`;
+
+    const grid = document.getElementById('genGrid');
+    grid.innerHTML = res.images.map((b64, i) => `
+      <div class="gen-card">
+        <img src="data:image/png;base64,${b64}" alt="Generated ${i+1}">
+        <div class="gen-actions">
+          <a href="data:image/png;base64,${b64}" download="daiviet_gen_${i+1}.png"
+             class="btn btn-secondary btn-sm">⬇ Tải về</a>
+        </div>
+      </div>
+    `).join('');
+
+    resultsEl.style.display = 'block';
+    document.getElementById('saveBar').classList.add('visible');
+  } catch(e) {
+    clearInterval(poll);
+    statusEl.innerHTML = `<span style="color:var(--red)">❌ Lỗi: ${e.message}</span>`;
+  } finally {
+    genBtn.disabled = false;
+  }
+}
+
+async function saveAllGenerated() {
+  if (!lastGenData) return;
+  const btn = document.querySelector('#saveBar .btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Đang lưu...';
+  let saved = 0;
+  for (const b64 of lastGenData.images) {
+    try {
+      await fetch('/api/save_generated', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          image_base64: b64,
+          period: lastGenData.period,
+          prompt: lastGenData.prompt_used,
+        }),
+      });
+      saved++;
+    } catch(e) { console.error(e); }
+  }
+  btn.textContent = `✔ Đã lưu ${saved} ảnh`;
+  loadStats();
+}
+
+// ══════════════════════════════════════════
+// MODAL
+// ══════════════════════════════════════════
+function openModal(p) {
+  document.getElementById('modalImg').src   = p.image_url || '';
+  document.getElementById('modalTitle').textContent = p.filename;
+  document.getElementById('modalBody').innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:.83rem;">
+      <tr><td style="padding:4px 8px;color:#888;width:38%;">Thời kỳ</td><td>${periodLabel(p.period)||'—'}</td></tr>
+      <tr><td style="padding:4px 8px;color:#888;">Phong cách</td><td>${p.style||'—'}</td></tr>
+      <tr><td style="padding:4px 8px;color:#888;">Motif</td><td>${p.motif_subject||'—'}</td></tr>
+      <tr><td style="padding:4px 8px;color:#888;">Đa motif</td><td>${p.multi_motif?'Có':'Không'}</td></tr>
+      ${p.source_url ? `<tr><td style="padding:4px 8px;color:#888;">Nguồn</td><td><a href="${p.source_url}" target="_blank" style="color:var(--gold);">Xem nguồn ↗</a></td></tr>` : ''}
+    </table>
+  `;
+  document.getElementById('modalOverlay').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('open');
+}
+document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+
+// ══════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════
+const PERIOD_LABELS = {
+  'Co-Dai':'Cổ đại','Ly-Tran':'Lý-Trần','Le':'Lê','Moi':'Mới','Nguyen':'Nguyễn'
+};
+function periodLabel(p) { return PERIOD_LABELS[p] || p; }
+
+// ══════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════
+loadStats();
+browseLoad(0);
+
+// Set default num-images button state
+document.querySelectorAll('.num-btn').forEach((b,i) => {
+  b.classList.remove('active');
+  if (i === 0) b.classList.add('active');
+});
+</script>
+</body>
+</html>

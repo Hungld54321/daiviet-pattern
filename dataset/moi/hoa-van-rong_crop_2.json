@@ -1,0 +1,15 @@
+{
+  "id": "hoa-van-rong_crop_2",
+  "name": "Hoa văn Rồng [crop 2]",
+  "source_url": "https://hoavandaiviet.vn/product/hoa-van-rong/",
+  "image_url": "https://hoavandaiviet.vn/wp-content/uploads/2023/02/HVDV-DB-LTH-HNG-002a_ver_02.jpg",
+  "period": "Moi",
+  "source_site": "hoavandaiviet.vn",
+  "license_note": "Cropped from multi-motif image",
+  "style": "line_art",
+  "multi_motif": false,
+  "cropped_from": "hoa-van-rong.jpg",
+  "downloaded_at": "2026-03-29T08:40:09.808183+00:00",
+  "motif_subject": "Rồng",
+  "artifact_source": "Họa tiết trên áo bào vua Lê Dụ Tông, Trang phục triều Lê Trịnh (Trịnh Quang Vũ, 2008)"
+}
