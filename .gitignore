@@ -5,6 +5,8 @@ train_data/
 benchmark_data/
 wikimedia_data/images/
 wikimedia_data/thumbnails/
+wikimedia_raw/images/
+wikimedia_raw/thumbnails/
 generated_samples/
 training_logs/
 
