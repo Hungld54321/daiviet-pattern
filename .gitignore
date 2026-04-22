@@ -1,5 +1,12 @@
-# Large model checkpoints (intermediate, not needed)
+# Large model outputs and checkpoints
+lora_output/
 lora_checkpoints/
+train_data/
+benchmark_data/
+wikimedia_data/images/
+wikimedia_data/thumbnails/
+generated_samples/
+training_logs/
 
 # Large evaluation model (standard download)
 inception-2015-12-05.pt
@@ -18,14 +25,16 @@ __pycache__/
 dist/
 build/
 
-# macOS metadata
+# macOS / Windows metadata
 ._*
 .DS_Store
+Thumbs.db
 
 # Claude config
 .claude/
 
-# Virtual environments
+# Virtual environments & secrets
 venv/
+.env
 .env/
 env/
