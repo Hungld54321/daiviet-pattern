@@ -121,6 +121,15 @@ def load_excel_metadata(excel_path: str) -> dict:
     return lookup
 
 
+def _strip_leading_zeros(s: str) -> str:
+    """
+    Strip leading zeros khỏi các số trong chuỗi normalized.
+    VD: "HVDV_-_LTH_-_CHAM_KHAC_-_086" → "HVDV_-_LTH_-_CHAM_KHAC_-_86"
+    Giữ nguyên phần chữ (vd: "023b" → "23b").
+    """
+    return re.sub(r'(?<=[_-])0+(\d)', r'\1', s)
+
+
 def match_excel(pdf_stem: str, lookup: dict) -> dict | None:
     """
     Ghép tên file PDF với mục trong Excel.
@@ -131,28 +140,35 @@ def match_excel(pdf_stem: str, lookup: dict) -> dict | None:
     Ma số Excel: "HVDV - LYTRAN - 001"
     Normalized:  "HVDV_-_LYTRAN_-_001"
 
-    Chiến lược: normalize PDF stem rồi so sánh với key đã normalize.
-    1. norm_stem.startswith(key)     — prefix chính xác
-    2. base (bỏ _ver_XX) == key     — sau khi strip phần version
-    3. key in norm_stem              — key xuất hiện trong tên file
+    Chiến lược (theo thứ tự ưu tiên):
+    1. norm_stem.startswith(key)           — prefix chính xác
+    2. base (bỏ _ver_XX) == key           — sau khi strip version
+    3. stripped_base == stripped_key       — bỏ leading zeros ở số
+    4. key in norm_stem                    — substring fallback
     """
     if not lookup:
         return None
 
-    # Normalize PDF stem (spaces → underscores) trước khi so sánh
+    # Normalize PDF stem (spaces → underscores)
     norm_stem = _norm(pdf_stem)
+    base = re.sub(r"_ver_\d+.*$", "", norm_stem, flags=re.IGNORECASE)
+    stripped_base = _strip_leading_zeros(base)
 
-    # 1. prefix match
+    # 1. prefix match (chính xác)
     for key, meta in lookup.items():
         if norm_stem.startswith(key):
             return meta
 
-    # 2. strip _ver_NN rồi so sánh
-    base = re.sub(r"_ver_\d+.*$", "", norm_stem, flags=re.IGNORECASE)
+    # 2. base == key (sau khi bỏ _ver_XX)
     if base in lookup:
         return lookup[base]
 
-    # 3. substring match (fallback)
+    # 3. so sánh sau khi strip leading zeros ở cả hai phía
+    for key, meta in lookup.items():
+        if stripped_base == _strip_leading_zeros(key):
+            return meta
+
+    # 4. substring fallback
     for key, meta in lookup.items():
         if key and key in norm_stem:
             return meta
