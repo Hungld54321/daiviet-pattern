@@ -1,43 +1,21 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-prepare_benchmark_data.py — Task 4.1: Xử lý dataset ĐạiViệt-Pattern v1 cho benchmark
-=======================================================================================
+prepare_benchmark_data.py — Task 4.1: Chuẩn bị benchmark dataset từ PDF vector
+=================================================================================
 
-Mục tiêu:
-  1. Lọc ảnh: line_art + single-motif (loại multi-motif + colored)
-  2. Gán caption với TRIGGER WORDS theo thời kỳ (Phương án A — 1 model chung)
-  3. Chia train/test = 80/20 (stratified by period, seed cố định)
-  4. Resize sang 2 resolution: 512×512 (SD 1.5) và 768×768 (SDXL/FLUX)
-  5. Tổ chức thư mục theo dataset variants (D_all + D_per_period)
-  6. Xuất metadata JSON + báo cáo thống kê
+Nguồn dữ liệu MỚI: vector_extracted/ (291 motifs trích từ PDF gốc)
+  - vector_extracted/ly_tran/   — 50 motifs + extract_manifest.csv
+  - vector_extracted/le/        — 94 motifs + extract_manifest.csv
+  - vector_extracted/nguyen/    — 147 motifs + extract_manifest.csv
 
-Output structure:
-  benchmark_data/
-  ├── metadata.json                 # Full metadata + split info
-  ├── stats_report.txt              # Báo cáo thống kê chi tiết
-  │
-  ├── 512/                          # Resolution 512×512 (cho SD 1.5)
-  │   ├── D_all/
-  │   │   ├── train/
-  │   │   │   ├── images/           # *.png
-  │   │   │   └── captions/         # *.txt (trigger word + caption)
-  │   │   └── test/
-  │   │       ├── images/
-  │   │       └── captions/
-  │   ├── D_dongson/
-  │   │   ├── train/ ...
-  │   │   └── test/ ...
-  │   ├── D_lytran/ ...
-  │   ├── D_le/ ...
-  │   └── D_nguyen/ ...
-  │
-  └── 768/                          # Resolution 768×768 (cho SDXL/FLUX)
-      └── (same structure as 512/)
+KHÔNG dùng dataset/ cũ (791 ảnh web-scrape).
 
 Cách chạy:
-  python prepare_benchmark_data.py                          # Dùng đường dẫn mặc định
-  python prepare_benchmark_data.py --base_dir /path/to/repo # Tùy chỉnh đường dẫn
+  python prepare_benchmark_data.py
+  python prepare_benchmark_data.py --base_dir D:/Hoavandaiviet --output_dir benchmark_data/
 
-Tác giả: Hùng (NCS UIT) — Task 4.1 cho TS. Hải
+Tác giả: Hùng (NCS UIT) — Task 4.1 Benchmark
 """
 
 import os
@@ -56,95 +34,110 @@ from PIL import Image
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
+Image.MAX_IMAGE_PIXELS = None
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-SEED = 42
-TEST_SIZE = 0.2  # 80/20 split
+SEED      = 42
+TEST_SIZE = 0.2
 RESOLUTIONS = [512, 768]
 
-# Period → subfolder on disk
+# Subfolder trong vector_extracted/ cho từng period
 PERIOD_FOLDER = {
-    "Co-Dai":  "co_dai",
-    "Le":      "le",
     "Ly-Tran": "ly_tran",
-    "Moi":     "moi",
+    "Le":      "le",
     "Nguyen":  "nguyen",
 }
 
-# Period → trigger word (Phương án A: 1 model chung, trigger words phân biệt)
+# Trigger words (Phương án A — 1 model chung)
 TRIGGER_WORDS = {
-    "Co-Dai":  "dong_son_style",
-    "Le":      "le_style",
     "Ly-Tran": "ly_tran_style",
-    "Moi":     "moi_style",        # Ethnic minority — giữ riêng
+    "Le":      "le_style",
     "Nguyen":  "nguyen_style",
 }
 
-# Period → human-readable label cho caption
+# Label tiếng Anh cho caption
 PERIOD_LABELS = {
-    "Co-Dai":  "Dong Son Bronze Age",
-    "Le":      "Le dynasty",
     "Ly-Tran": "Ly-Tran dynasty",
-    "Moi":     "ethnic minority",
+    "Le":      "Le dynasty",
     "Nguyen":  "Nguyen dynasty",
 }
 
-# Dataset variant → periods to include
+# Dataset variants
+# D_all      = toàn bộ (line_art + colored)
+# D_line_art = chỉ line_art
+# D_lytran / D_le / D_nguyen = per-period
 DATASET_VARIANTS = {
-    "D_all":      ["Co-Dai", "Le", "Ly-Tran", "Nguyen", "Moi"],
-    "D_dongson":  ["Co-Dai"],
-    "D_lytran":   ["Ly-Tran"],
-    "D_le":       ["Le"],
-    "D_nguyen":   ["Nguyen"],
+    "D_all":      {"periods": ["Ly-Tran", "Le", "Nguyen"], "style_filter": None},
+    "D_line_art": {"periods": ["Ly-Tran", "Le", "Nguyen"], "style_filter": "line_art"},
+    "D_lytran":   {"periods": ["Ly-Tran"],                 "style_filter": None},
+    "D_le":       {"periods": ["Le"],                      "style_filter": None},
+    "D_nguyen":   {"periods": ["Nguyen"],                  "style_filter": None},
 }
+
+MIN_DIM = 64    # Loại ảnh nhỏ hơn ngưỡng này
 
 
 # ============================================================================
 # HELPERS
 # ============================================================================
-def safe(val, fallback="unknown"):
-    """Return cleaned string, or fallback if NaN/empty."""
-    if pd.isna(val) or str(val).strip() == "":
+def safe(val, fallback=""):
+    """Trả về chuỗi sạch, hoặc fallback nếu NaN/rỗng."""
+    if pd.isna(val) or str(val).strip() in ("", "nan", "None"):
         return fallback
     return str(val).strip()
 
 
-def build_caption(row, use_trigger=True):
+def build_caption(row, use_trigger: bool = True) -> str:
     """
-    Build caption for an image row from manifest.
-    
-    Format with trigger word (for training):
-      "dong_son_style, Vietnamese Dong Son Bronze Age ornamental pattern, 
-       Trống Hoàng Hạ, traditional Dai Viet art, black and white line art"
-    
-    Format without trigger word (for vanilla baseline prompts):
-      "Vietnamese Dong Son Bronze Age ornamental pattern, Trống Hoàng Hạ, 
-       traditional Dai Viet art, black and white line art"
+    Tạo caption cho một motif.
+
+    Với trigger word (dùng cho training M2, M3, M6):
+      "ly_tran_style, Vietnamese Ly-Tran dynasty ornamental pattern,
+       Rồng thời Lý, Cửu đỉnh Thế Miếu, traditional Dai Viet art,
+       high quality, detailed"
+
+    Không trigger word (dùng cho baseline M1):
+      "Vietnamese Ly-Tran dynasty ornamental pattern, Rồng thời Lý,
+       traditional Dai Viet art, high quality, detailed"
     """
-    period = safe(row["period"], "Vietnamese")
-    subject = safe(row["motif_subject"], "ornamental pattern")
+    period      = safe(row.get("period", ""), "Vietnamese")
+    mieu_ta     = safe(row.get("mieu_ta",  ""), "")
+    nguon_goc   = safe(row.get("nguon_goc",""), "")
+    style       = safe(row.get("style",    ""), "")
+
     period_label = PERIOD_LABELS.get(period, period)
-    trigger = TRIGGER_WORDS.get(period, "vietnamese_style")
-    
-    # Rút gọn subject nếu quá dài (>80 chars)
-    if len(subject) > 80:
-        subject = subject[:77] + "..."
-    
-    base_caption = (
+    trigger      = TRIGGER_WORDS.get(period, "vietnamese_style")
+
+    # Rút gọn nếu quá dài
+    if len(mieu_ta) > 80:
+        mieu_ta = mieu_ta[:77] + "..."
+    if len(nguon_goc) > 100:
+        nguon_goc = nguon_goc[:97] + "..."
+
+    # Phần mô tả phong phú (nếu có metadata)
+    desc_parts = []
+    if mieu_ta:
+        desc_parts.append(mieu_ta)
+    if nguon_goc:
+        desc_parts.append(nguon_goc)
+    desc = ", ".join(desc_parts) if desc_parts else "ornamental pattern"
+
+    style_tag = "black and white line art" if style == "line_art" else "colored ornamental art"
+
+    base = (
         f"Vietnamese {period_label} ornamental pattern, "
-        f"{subject}, "
-        f"traditional Dai Viet art, black and white line art, "
+        f"{desc}, "
+        f"traditional Dai Viet art, {style_tag}, "
         f"high quality, detailed"
     )
-    
-    if use_trigger:
-        return f"{trigger}, {base_caption}"
-    return base_caption
+
+    return f"{trigger}, {base}" if use_trigger else base
 
 
-def build_baseline_prompt(period):
-    """Build standardized prompt for vanilla model inference (no trigger word)."""
+def build_baseline_prompt(period: str) -> str:
+    """Prompt chuẩn không trigger word cho M1 (vanilla inference)."""
     period_label = PERIOD_LABELS.get(period, "Vietnamese")
     return (
         f"Vietnamese {period_label} traditional ornamental pattern, "
@@ -153,459 +146,474 @@ def build_baseline_prompt(period):
     )
 
 
-def resize_with_padding(img, target_size, bg_color=(255, 255, 255)):
-    """Resize image to target_size×target_size with white padding (aspect-preserving)."""
+def pad_and_resize(img: Image.Image, size: int) -> Image.Image:
+    """White-pad về vuông rồi resize, giữ nguyên aspect ratio."""
     w, h = img.size
     maxdim = max(w, h)
-    canvas = Image.new("RGB", (maxdim, maxdim), bg_color)
-    canvas.paste(img, ((maxdim - w) // 2, (maxdim - h) // 2))
-    return canvas.resize((target_size, target_size), Image.LANCZOS)
-
-
-def compute_image_hash(img_path):
-    """SHA-256 hash of image file for deduplication check."""
-    h = hashlib.sha256()
-    with open(img_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()[:16]
-
-
-def find_image(filename, period, dataset_dir):
-    """Find image file on disk, checking period folder first, then fallback."""
-    folder = PERIOD_FOLDER.get(period)
-    if folder:
-        p = dataset_dir / folder / filename
-        if p.exists():
-            return p
-    for folder in PERIOD_FOLDER.values():
-        p = dataset_dir / folder / filename
-        if p.exists():
-            return p
-    return None
+    canvas = Image.new("RGB", (maxdim, maxdim), (255, 255, 255))
+    canvas.paste(img.convert("RGB"), ((maxdim - w) // 2, (maxdim - h) // 2))
+    return canvas.resize((size, size), Image.LANCZOS)
 
 
 # ============================================================================
-# MAIN PROCESSING
+# STEP 1: Load & merge manifests
 # ============================================================================
-def process_dataset(base_dir: Path, output_dir: Path):
-    """Main processing pipeline."""
-    
-    manifest_path = base_dir / "dataset_manifest.csv"
-    dataset_dir = base_dir / "dataset"
-    
-    if not manifest_path.exists():
-        print(f"ERROR: manifest not found at {manifest_path}")
-        sys.exit(1)
-    
-    # ------------------------------------------------------------------
-    # Step 1: Load & filter manifest
-    # ------------------------------------------------------------------
+def load_manifests(base_dir: Path) -> pd.DataFrame:
     print("=" * 60)
-    print("STEP 1: Load & filter manifest")
+    print("BƯỚC 1: Đọc và merge 3 file extract_manifest.csv")
     print("=" * 60)
-    
-    df = pd.read_csv(manifest_path)
-    total_raw = len(df)
-    print(f"  Raw manifest: {total_raw} rows")
-    
-    # Filter: line_art only
-    df = df[df["style"].str.strip().str.lower() == "line_art"]
-    after_style = len(df)
-    print(f"  After line_art filter: {after_style} rows (-{total_raw - after_style} colored)")
-    
-    # Filter: single-motif only
-    df = df[df["multi_motif"].astype(str).str.strip().str.lower() == "false"]
-    after_motif = len(df)
-    print(f"  After single-motif filter: {after_motif} rows (-{after_style - after_motif} multi-motif)")
-    
-    if len(df) == 0:
-        print("ERROR: no images remain after filtering.")
+
+    extracted_dir = base_dir / "vector_extracted"
+    frames = []
+
+    for period, folder in PERIOD_FOLDER.items():
+        manifest_path = extracted_dir / folder / "extract_manifest.csv"
+        if not manifest_path.exists():
+            print(f"  [WARN] Không tìm thấy: {manifest_path}")
+            continue
+
+        df = pd.read_csv(manifest_path, encoding="utf-8-sig")
+        df["period"] = period   # đảm bảo period đúng
+        df["_img_path"] = df["filename"].apply(
+            lambda f: str(extracted_dir / folder / f)
+        )
+        frames.append(df)
+        print(f"  {period:<10}: {len(df):>4} rows  ← {manifest_path}")
+
+    if not frames:
+        print("ERROR: Không tìm thấy bất kỳ extract_manifest.csv nào.")
         sys.exit(1)
-    
-    # Verify images exist on disk
-    valid_rows = []
-    missing = []
-    for _, row in df.iterrows():
-        img_path = find_image(safe(row["filename"]), safe(row["period"]), dataset_dir)
-        if img_path is not None:
-            valid_rows.append({**row.to_dict(), "_img_path": str(img_path)})
-        else:
-            missing.append(safe(row["filename"]))
-    
-    df_valid = pd.DataFrame(valid_rows)
-    print(f"  After disk verification: {len(df_valid)} rows ({len(missing)} missing)")
-    if missing:
-        print(f"  Missing files: {missing[:5]}{'...' if len(missing) > 5 else ''}")
-    
-    print(f"\n  Period distribution:")
-    for period, count in df_valid["period"].value_counts().items():
-        trigger = TRIGGER_WORDS.get(period, "?")
-        print(f"    {period:<12} {count:>4} images  → trigger: {trigger}")
-    
-    # ------------------------------------------------------------------
-    # Step 2: Quality checks
-    # ------------------------------------------------------------------
+
+    merged = pd.concat(frames, ignore_index=True)
+    print(f"\n  Tổng: {len(merged)} rows từ {len(frames)} thời kỳ")
+    return merged
+
+
+# ============================================================================
+# STEP 2: Thống kê & quality check
+# ============================================================================
+def quality_check(df: pd.DataFrame) -> pd.DataFrame:
     print(f"\n{'=' * 60}")
-    print("STEP 2: Quality checks")
+    print("BƯỚC 2: Thống kê chất lượng dataset")
     print("=" * 60)
-    
-    # Check image dimensions and identify potential issues
-    dim_stats = defaultdict(int)
-    small_images = []
-    corrupt_images = []
-    
-    for _, row in tqdm(df_valid.iterrows(), total=len(df_valid), desc="  Checking quality"):
+
+    # Phân bổ theo period
+    print("\n  Period distribution:")
+    for period, grp in df.groupby("period"):
+        n_line  = (grp["style"] == "line_art").sum()
+        n_color = (grp["style"] == "colored").sum()
+        print(f"    {period:<10}: {len(grp):>4} total  "
+              f"(line_art={n_line}, colored={n_color})")
+
+    # Phân bổ line_art vs colored
+    n_line  = (df["style"] == "line_art").sum()
+    n_color = (df["style"] == "colored").sum()
+    print(f"\n  Style:  line_art={n_line} ({n_line/len(df)*100:.1f}%)  "
+          f"colored={n_color} ({n_color/len(df)*100:.1f}%)")
+
+    # Kiểm tra ảnh trên disk
+    print(f"\n  Kiểm tra ảnh trên disk...")
+    corrupt, small, missing = [], [], []
+    widths, heights = [], []
+
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="  Quality check"):
+        p = Path(row["_img_path"])
+        if not p.exists():
+            missing.append(row["filename"])
+            continue
         try:
-            img = Image.open(row["_img_path"])
+            img = Image.open(p)
             w, h = img.size
-            dim_stats[f"{w}x{h}"] += 1
-            if min(w, h) < 128:
-                small_images.append((safe(row["filename"]), w, h))
+            widths.append(w)
+            heights.append(h)
+            if min(w, h) < MIN_DIM:
+                small.append((row["filename"], w, h))
         except Exception as e:
-            corrupt_images.append((safe(row["filename"]), str(e)))
-    
-    print(f"  Corrupt images: {len(corrupt_images)}")
-    for name, err in corrupt_images:
-        print(f"    ✗ {name}: {err}")
-    
-    print(f"  Very small images (<128px): {len(small_images)}")
-    for name, w, h in small_images[:5]:
-        print(f"    ⚠ {name}: {w}×{h}")
-    
-    # Top 5 resolutions
-    print(f"  Top 5 image dimensions:")
-    for dim, count in sorted(dim_stats.items(), key=lambda x: -x[1])[:5]:
-        print(f"    {dim}: {count} images")
-    
-    # Remove corrupt images
-    if corrupt_images:
-        corrupt_names = {name for name, _ in corrupt_images}
-        df_valid = df_valid[~df_valid["filename"].isin(corrupt_names)]
-        print(f"  → Removed {len(corrupt_names)} corrupt images. Remaining: {len(df_valid)}")
-    
-    # ------------------------------------------------------------------
-    # Step 3: Stratified train/test split
-    # ------------------------------------------------------------------
+            corrupt.append((row["filename"], str(e)))
+
+    print(f"  Không tìm thấy:  {len(missing)}")
+    print(f"  Ảnh lỗi:         {len(corrupt)}")
+    print(f"  Ảnh quá nhỏ:     {len(small)}  (<{MIN_DIM}px)")
+
+    if widths:
+        import numpy as np
+        print(f"\n  Kích thước (width):  "
+              f"min={min(widths)}  max={max(widths)}  "
+              f"mean={int(np.mean(widths))}  median={int(np.median(widths))}")
+        print(f"  Kích thước (height): "
+              f"min={min(heights)}  max={max(heights)}  "
+              f"mean={int(np.mean(heights))}  median={int(np.median(heights))}")
+
+    # Loại bỏ ảnh lỗi và missing
+    bad = set(missing) | {f for f, _ in corrupt}
+    if bad:
+        df = df[~df["filename"].isin(bad)].copy()
+        print(f"\n  → Đã loại: {len(bad)} ảnh. Còn lại: {len(df)}")
+
+    return df
+
+
+# ============================================================================
+# STEP 3: Train/Test split
+# ============================================================================
+def split_dataset(df: pd.DataFrame):
     print(f"\n{'=' * 60}")
-    print(f"STEP 3: Train/Test split (test_size={TEST_SIZE}, seed={SEED})")
+    print(f"BƯỚC 3: Train/Test split  "
+          f"(stratified by period, test={TEST_SIZE}, seed={SEED})")
     print("=" * 60)
-    
-    # Stratified split by period
+
     train_df, test_df = train_test_split(
-        df_valid,
+        df,
         test_size=TEST_SIZE,
         random_state=SEED,
-        stratify=df_valid["period"]
+        stratify=df["period"],
     )
-    
-    print(f"  Train: {len(train_df)} images")
-    print(f"  Test:  {len(test_df)} images")
-    print(f"\n  Split distribution:")
-    print(f"  {'Period':<12} {'Train':>6} {'Test':>6} {'Total':>6} {'Test%':>6}")
+    train_df = train_df.copy()
+    test_df  = test_df.copy()
+    train_df["split"] = "train"
+    test_df["split"]  = "test"
+
+    print(f"\n  {'Period':<12} {'Train':>6} {'Test':>5} {'Total':>6} {'Test%':>6}")
     print(f"  {'-'*42}")
-    for period in sorted(df_valid["period"].unique()):
-        n_train = len(train_df[train_df["period"] == period])
-        n_test = len(test_df[test_df["period"] == period])
-        total = n_train + n_test
-        pct = n_test / total * 100 if total > 0 else 0
-        print(f"  {period:<12} {n_train:>6} {n_test:>6} {total:>6} {pct:>5.1f}%")
-    
-    # ------------------------------------------------------------------
-    # Step 4: Process images & write to disk
-    # ------------------------------------------------------------------
+    for period in sorted(df["period"].unique()):
+        n_tr = (train_df["period"] == period).sum()
+        n_te = (test_df["period"]  == period).sum()
+        tot  = n_tr + n_te
+        print(f"  {period:<12} {n_tr:>6} {n_te:>5} {tot:>6} {n_te/tot*100:>5.1f}%")
+    print(f"  {'TOTAL':<12} {len(train_df):>6} {len(test_df):>5} "
+          f"{len(df):>6} {len(test_df)/len(df)*100:>5.1f}%")
+
+    return train_df, test_df
+
+
+# ============================================================================
+# STEP 4 & 5: Process images → resize & write captions
+# ============================================================================
+def process_images(train_df: pd.DataFrame, test_df: pd.DataFrame,
+                   output_dir: Path):
     print(f"\n{'=' * 60}")
-    print("STEP 4: Process images & write to disk")
+    print("BƯỚC 4 & 5: Resize ảnh và xuất captions")
     print("=" * 60)
-    
-    # Build lookup: filename → (split, row)
-    records = []
-    for _, row in train_df.iterrows():
-        records.append(("train", row))
-    for _, row in test_df.iterrows():
-        records.append(("test", row))
-    
-    # Process for each resolution
+
+    all_df = pd.concat([train_df, test_df], ignore_index=True)
+
     for res in RESOLUTIONS:
         print(f"\n  --- Resolution: {res}×{res} ---")
-        
-        # Create directory structure for all variants
-        for variant_name, variant_periods in DATASET_VARIANTS.items():
+
+        # Tạo thư mục cho tất cả variants và splits
+        for vname, vcfg in DATASET_VARIANTS.items():
             for split in ["train", "test"]:
-                (output_dir / str(res) / variant_name / split / "images").mkdir(parents=True, exist_ok=True)
-                (output_dir / str(res) / variant_name / split / "captions").mkdir(parents=True, exist_ok=True)
-        
-        processed = 0
-        for split, row in tqdm(records, desc=f"  Resize → {res}px"):
-            filename = safe(row["filename"])
+                (output_dir / str(res) / vname / split / "images").mkdir(
+                    parents=True, exist_ok=True)
+                (output_dir / str(res) / vname / split / "captions").mkdir(
+                    parents=True, exist_ok=True)
+
+        n_written = 0
+        for _, row in tqdm(all_df.iterrows(), total=len(all_df),
+                           desc=f"  {res}px"):
             period = safe(row["period"])
-            stem = Path(filename).stem
-            
+            style  = safe(row["style"])
+            split  = row["split"]
+            stem   = Path(row["filename"]).stem
+
             try:
-                img = Image.open(row["_img_path"]).convert("RGB")
-            except Exception:
+                img = Image.open(row["_img_path"])
+                resized = pad_and_resize(img, res)
+            except Exception as e:
+                tqdm.write(f"  [WARN] Skip {row['filename']}: {e}")
                 continue
-            
-            resized = resize_with_padding(img, res)
-            
-            # Caption with trigger word
+
             caption_trigger = build_caption(row, use_trigger=True)
-            # Caption without trigger word (for reference / vanilla baseline)
-            caption_plain = build_caption(row, use_trigger=False)
-            
-            # Write to each applicable variant
-            for variant_name, variant_periods in DATASET_VARIANTS.items():
-                if period in variant_periods:
-                    img_out = output_dir / str(res) / variant_name / split / "images" / f"{stem}.png"
-                    cap_out = output_dir / str(res) / variant_name / split / "captions" / f"{stem}.txt"
-                    
-                    resized.save(img_out, "PNG")
-                    cap_out.write_text(caption_trigger, encoding="utf-8")
-            
-            processed += 1
-        
-        print(f"  Processed: {processed} images → {res}×{res}")
-    
-    # ------------------------------------------------------------------
-    # Step 5: Generate baseline prompts (for M1: SDXL vanilla)
-    # ------------------------------------------------------------------
+
+            for vname, vcfg in DATASET_VARIANTS.items():
+                # Lọc theo period
+                if period not in vcfg["periods"]:
+                    continue
+                # Lọc theo style (nếu variant yêu cầu)
+                if vcfg["style_filter"] and style != vcfg["style_filter"]:
+                    continue
+
+                img_out = (output_dir / str(res) / vname / split
+                           / "images" / f"{stem}.png")
+                cap_out = (output_dir / str(res) / vname / split
+                           / "captions" / f"{stem}.txt")
+
+                resized.save(img_out, "PNG")
+                cap_out.write_text(caption_trigger, encoding="utf-8")
+
+            n_written += 1
+
+        print(f"  Đã xử lý: {n_written} ảnh → {res}×{res}")
+
+
+# ============================================================================
+# STEP 6: Baseline prompts
+# ============================================================================
+def write_baseline_prompts(output_dir: Path):
     print(f"\n{'=' * 60}")
-    print("STEP 5: Generate baseline prompts")
+    print("BƯỚC 6: Xuất baseline prompts")
     print("=" * 60)
-    
+
     prompts_dir = output_dir / "baseline_prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    
-    baseline_prompts = {}
-    for period in sorted(PERIOD_LABELS.keys()):
+
+    baseline = {}
+    for period in sorted(PERIOD_LABELS):
         prompt = build_baseline_prompt(period)
-        baseline_prompts[period] = prompt
-        print(f"  {period:<12}: {prompt[:70]}...")
-    
-    # Save prompts
+        baseline[period] = prompt
+        print(f"  {period}: {prompt[:70]}...")
+
+    # JSON tổng hợp
     with open(prompts_dir / "baseline_prompts.json", "w", encoding="utf-8") as f:
-        json.dump(baseline_prompts, f, indent=2, ensure_ascii=False)
-    
-    # Also save per-period prompt files for easy scripting
-    for period, prompt in baseline_prompts.items():
+        json.dump(baseline, f, indent=2, ensure_ascii=False)
+
+    # File .txt riêng theo period
+    for period, prompt in baseline.items():
         trigger = TRIGGER_WORDS.get(period, "vietnamese_style")
-        with open(prompts_dir / f"prompts_{trigger}.txt", "w", encoding="utf-8") as f:
-            f.write(f"# Baseline prompt (no trigger word) for M1:\n")
-            f.write(f"{prompt}\n\n")
-            f.write(f"# Training prompt (with trigger word) for M2/M3/M4/M6:\n")
-            f.write(f"{trigger}, {prompt}\n")
-    
-    print(f"  Saved to: {prompts_dir}")
-    
-    # ------------------------------------------------------------------
-    # Step 6: Generate metadata JSON
-    # ------------------------------------------------------------------
+        out = prompts_dir / f"prompts_{trigger}.txt"
+        out.write_text(
+            f"# Baseline prompt (no trigger word) for M1:\n{prompt}\n\n"
+            f"# Training prompt (with trigger word) for M2/M3/M6:\n"
+            f"{trigger}, {prompt}\n",
+            encoding="utf-8",
+        )
+
+    print(f"  Saved: {prompts_dir}")
+
+
+# ============================================================================
+# STEP 7: metadata.json
+# ============================================================================
+def write_metadata(df: pd.DataFrame, train_df: pd.DataFrame,
+                   test_df: pd.DataFrame, output_dir: Path) -> dict:
     print(f"\n{'=' * 60}")
-    print("STEP 6: Generate metadata")
+    print("BƯỚC 7: Xuất metadata.json")
     print("=" * 60)
-    
-    metadata = {
-        "dataset_name": "DaiViet-Pattern Benchmark v1.0",
-        "description": "Processed dataset for Task 4.1 benchmark — comparing generative models on Vietnamese ornamental patterns",
-        "created": datetime.now().isoformat(),
-        "source": "ĐạiViệt-Pattern dataset v1 (hoavandaiviet.vn)",
-        "github": "https://github.com/Hungld54321/daiviet-pattern",
-        "seed": SEED,
-        "test_size": TEST_SIZE,
-        "resolutions": RESOLUTIONS,
-        "filter_criteria": {
-            "style": "line_art",
-            "multi_motif": False,
-        },
-        "trigger_words": TRIGGER_WORDS,
-        "total_images": len(df_valid),
-        "train_count": len(train_df),
-        "test_count": len(test_df),
-        "period_distribution": {},
-        "variants": {},
-        "train_files": [],
-        "test_files": [],
-    }
-    
-    # Period distribution
-    for period in sorted(df_valid["period"].unique()):
-        n_train = len(train_df[train_df["period"] == period])
-        n_test = len(test_df[test_df["period"] == period])
-        metadata["period_distribution"][period] = {
-            "total": n_train + n_test,
-            "train": n_train,
-            "test": n_test,
+
+    period_dist = {}
+    for period in sorted(df["period"].unique()):
+        n_tr = (train_df["period"] == period).sum()
+        n_te = (test_df["period"]  == period).sum()
+        n_line  = (df[df["period"] == period]["style"] == "line_art").sum()
+        n_color = (df[df["period"] == period]["style"] == "colored").sum()
+        period_dist[period] = {
+            "total": int(n_tr + n_te),
+            "train": int(n_tr),
+            "test":  int(n_te),
+            "line_art": int(n_line),
+            "colored":  int(n_color),
             "trigger_word": TRIGGER_WORDS.get(period, "?"),
         }
-    
-    # Variant stats
-    for variant_name, variant_periods in DATASET_VARIANTS.items():
-        v_train = len(train_df[train_df["period"].isin(variant_periods)])
-        v_test = len(test_df[test_df["period"].isin(variant_periods)])
-        metadata["variants"][variant_name] = {
-            "periods": variant_periods,
-            "train": v_train,
-            "test": v_test,
-            "total": v_train + v_test,
+
+    variant_stats = {}
+    for vname, vcfg in DATASET_VARIANTS.items():
+        def count(split_df):
+            mask = split_df["period"].isin(vcfg["periods"])
+            if vcfg["style_filter"]:
+                mask &= split_df["style"] == vcfg["style_filter"]
+            return int(mask.sum())
+        v_tr = count(train_df)
+        v_te = count(test_df)
+        variant_stats[vname] = {
+            "periods":      vcfg["periods"],
+            "style_filter": vcfg["style_filter"],
+            "train": v_tr,
+            "test":  v_te,
+            "total": v_tr + v_te,
         }
-    
-    # File lists (for reproducibility)
-    for _, row in train_df.iterrows():
-        metadata["train_files"].append({
-            "filename": safe(row["filename"]),
-            "period": safe(row["period"]),
-            "motif_subject": safe(row["motif_subject"], ""),
-        })
-    for _, row in test_df.iterrows():
-        metadata["test_files"].append({
-            "filename": safe(row["filename"]),
-            "period": safe(row["period"]),
-            "motif_subject": safe(row["motif_subject"], ""),
-        })
-    
+
+    # File lists để reproducibility
+    train_files = [
+        {"filename": safe(r["filename"]), "period": safe(r["period"]),
+         "style": safe(r["style"]), "ma_so": safe(r.get("ma_so",""))}
+        for _, r in train_df.iterrows()
+    ]
+    test_files = [
+        {"filename": safe(r["filename"]), "period": safe(r["period"]),
+         "style": safe(r["style"]), "ma_so": safe(r.get("ma_so",""))}
+        for _, r in test_df.iterrows()
+    ]
+
+    metadata = {
+        "dataset_name":  "DaiViet-Pattern Benchmark v2.0 (vector source)",
+        "description":   "Task 4.1 benchmark — 291 motifs từ PDF vector gốc",
+        "created":       datetime.now().isoformat(),
+        "source":        "Dự án Hoa Văn Đại Việt — Đại Việt Cổ Phong + Comicola",
+        "github":        "https://github.com/Hungld54321/daiviet-pattern",
+        "seed":          SEED,
+        "test_size":     TEST_SIZE,
+        "resolutions":   RESOLUTIONS,
+        "trigger_words": TRIGGER_WORDS,
+        "total_images":  len(df),
+        "train_count":   len(train_df),
+        "test_count":    len(test_df),
+        "period_distribution": period_dist,
+        "variants":      variant_stats,
+        "train_files":   train_files,
+        "test_files":    test_files,
+    }
+
     meta_path = output_dir / "metadata.json"
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
     print(f"  Saved: {meta_path}")
-    
-    # ------------------------------------------------------------------
-    # Step 7: Statistics report
-    # ------------------------------------------------------------------
+    return metadata
+
+
+# ============================================================================
+# STEP 8: stats_report.txt
+# ============================================================================
+def write_report(df: pd.DataFrame, train_df: pd.DataFrame,
+                 test_df: pd.DataFrame, metadata: dict, output_dir: Path,
+                 n_missing: int, n_corrupt: int):
     print(f"\n{'=' * 60}")
-    print("STEP 7: Statistics report")
+    print("BƯỚC 8: Xuất stats_report.txt")
     print("=" * 60)
-    
-    report_lines = []
-    report_lines.append("=" * 60)
-    report_lines.append("TASK 4.1 — BENCHMARK DATASET REPORT")
-    report_lines.append(f"ĐạiViệt-Pattern v1.0 — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    report_lines.append("=" * 60)
-    report_lines.append("")
-    
-    report_lines.append("1. SOURCE")
-    report_lines.append(f"   Raw manifest: {total_raw} images")
-    report_lines.append(f"   After filter (line_art + single-motif): {after_motif}")
-    report_lines.append(f"   After disk verification: {len(df_valid)}")
-    report_lines.append(f"   Corrupt/removed: {len(corrupt_images)}")
-    report_lines.append(f"   Missing on disk: {len(missing)}")
-    report_lines.append("")
-    
-    report_lines.append("2. TRAIN/TEST SPLIT")
-    report_lines.append(f"   Strategy: stratified by period, test_size={TEST_SIZE}, seed={SEED}")
-    report_lines.append(f"   Train: {len(train_df)} images ({len(train_df)/len(df_valid)*100:.1f}%)")
-    report_lines.append(f"   Test:  {len(test_df)} images ({len(test_df)/len(df_valid)*100:.1f}%)")
-    report_lines.append("")
-    
-    report_lines.append("   Period        Train   Test  Total  Test%")
-    report_lines.append("   " + "-" * 48)
-    for period in sorted(df_valid["period"].unique()):
-        n_train = len(train_df[train_df["period"] == period])
-        n_test = len(test_df[test_df["period"] == period])
-        total = n_train + n_test
-        pct = n_test / total * 100 if total > 0 else 0
-        trigger = TRIGGER_WORDS.get(period, "?")
-        report_lines.append(f"   {period:<12} {n_train:>5} {n_test:>6} {total:>6} {pct:>5.1f}%  [{trigger}]")
-    report_lines.append("")
-    
-    report_lines.append("3. DATASET VARIANTS")
-    for variant_name, variant_periods in DATASET_VARIANTS.items():
-        v_train = metadata["variants"][variant_name]["train"]
-        v_test = metadata["variants"][variant_name]["test"]
-        report_lines.append(f"   {variant_name:<14} train={v_train}, test={v_test}, total={v_train+v_test}")
-        report_lines.append(f"                  periods: {', '.join(variant_periods)}")
-    report_lines.append("")
-    
-    report_lines.append("4. RESOLUTIONS")
+
+    lines = []
+    sep = "=" * 60
+
+    lines += [sep,
+              "TASK 4.1 — BENCHMARK DATASET REPORT",
+              f"DaiViet-Pattern v2.0 — {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+              sep, ""]
+
+    lines += ["1. NGUỒN DỮ LIỆU",
+              "   Nguồn: PDF vector gốc (Hoa Văn Đại Việt — Đại Việt Cổ Phong)",
+              f"   Tổng sau merge:    {len(df) + n_missing + n_corrupt} motifs",
+              f"   Sau quality check: {len(df)} motifs  "
+              f"(loại {n_missing} missing + {n_corrupt} corrupt)", ""]
+
+    lines += ["2. PHÂN BỔ THEO THỜI KỲ",
+              f"   {'Period':<12} {'Total':>6} {'line_art':>9} {'colored':>8}"]
+    lines.append(f"   {'-'*40}")
+    for period, d in metadata["period_distribution"].items():
+        lines.append(f"   {period:<12} {d['total']:>6} {d['line_art']:>9} "
+                     f"{d['colored']:>8}   → trigger: {d['trigger_word']}")
+    lines.append("")
+
+    lines += ["3. TRAIN/TEST SPLIT",
+              f"   Strategy: stratified by period, test_size={TEST_SIZE}, seed={SEED}",
+              f"   Train: {len(train_df)} images  ({len(train_df)/len(df)*100:.1f}%)",
+              f"   Test:  {len(test_df)} images  ({len(test_df)/len(df)*100:.1f}%)", ""]
+
+    lines += ["4. DATASET VARIANTS"]
+    for vname, vs in metadata["variants"].items():
+        sf = vs.get("style_filter") or "all styles"
+        lines.append(f"   {vname:<14} train={vs['train']:>3}, test={vs['test']:>3}, "
+                     f"total={vs['total']:>3}  |  {sf}  |  "
+                     f"periods: {', '.join(vs['periods'])}")
+    lines.append("")
+
+    lines += ["5. RESOLUTIONS"]
     for res in RESOLUTIONS:
-        report_lines.append(f"   {res}×{res}: all variants prepared")
-    report_lines.append("")
-    
-    report_lines.append("5. CAPTION FORMAT (with trigger word)")
-    sample_row = df_valid.iloc[0]
-    report_lines.append(f"   Example: {build_caption(sample_row, use_trigger=True)}")
-    report_lines.append("")
-    
-    report_lines.append("6. TRIGGER WORDS")
-    for period, trigger in sorted(TRIGGER_WORDS.items()):
-        report_lines.append(f"   {period:<12} → {trigger}")
-    report_lines.append("")
-    
-    report_lines.append("7. MODELS TO BENCHMARK (from Task 4.1 spec)")
-    report_lines.append("   M1: SDXL 1.0 vanilla     — no fine-tune, baseline_prompts.json")
-    report_lines.append("   M2: SDXL + LoRA           — 768/D_all/train, rank=16, lora_alpha=32")
-    report_lines.append("   M3: SD 1.5 + LoRA         — 512/D_all/train, rank=16")
-    report_lines.append("   M4: FLUX.1-dev + LoRA     — 512/D_all/train (bonus)")
-    report_lines.append("   M5: StyleGAN2-ADA         — 512/D_all/train (bonus)")
-    report_lines.append("   M6: SDXL + LoRA + L_cult  — 768/D_all/train, λ=0.3")
-    report_lines.append("")
-    
-    report_lines.append("8. EVALUATION PROTOCOL")
-    report_lines.append("   Generate: 50 images/model × 4 periods = 200 images/model")
-    report_lines.append("   Compare against: test set (per-period)")
-    report_lines.append("   Metrics: FID ↓ | CLIP Score ↑ | SSIM ↑ | LPIPS ↓ | PSNR ↑")
-    report_lines.append("   Note: FID on N=50 is indicative, N≥2048 for journal version")
-    report_lines.append("")
-    
-    report_lines.append("9. PRIOR RESULTS (from ĐạiViệt-Pattern paper, N=20)")
-    report_lines.append("   Method                    FID↓     SSIM    CLIP↑")
-    report_lines.append("   SDXL vanilla              368.06   0.1255  0.2888")
-    report_lines.append("   SDXL+LoRA+L_cultural      336.07   0.1113  0.3135")
-    report_lines.append("   → These serve as reference; will be recomputed on new splits")
-    report_lines.append("")
-    
-    report_lines.append("=" * 60)
-    report_lines.append("END OF REPORT")
-    report_lines.append("=" * 60)
-    
-    report_text = "\n".join(report_lines)
+        lines.append(f"   {res}×{res}: tất cả variants đã chuẩn bị")
+    lines.append("")
+
+    lines += ["6. CAPTION FORMAT (với trigger word — dùng cho training)"]
+    sample = df.iloc[0]
+    lines.append(f"   Ví dụ: {build_caption(sample.to_dict(), use_trigger=True)}")
+    lines.append("")
+
+    lines += ["7. MODELS TO BENCHMARK (Task 4.1)"]
+    for m, desc in [
+        ("M1", "SDXL 1.0 vanilla           — baseline_prompts.json, no fine-tune"),
+        ("M2", "SDXL + LoRA                — 768/D_all/train, rank=16, lora_alpha=32"),
+        ("M3", "SD 1.5 + LoRA              — 512/D_all/train, rank=16"),
+        ("M6", "SDXL + LoRA + L_cultural   — 768/D_all/train, lambda=0.3"),
+    ]:
+        lines.append(f"   {m}: {desc}")
+    lines.append("")
+
+    lines += ["8. EVALUATION PROTOCOL",
+              "   Generate: 50 images/model × 3 periods = 150 images/model",
+              "   Compare vs: test set (per-period)",
+              "   Metrics: FID↓ | CLIP Score↑ | SSIM↑ | LPIPS↓ | PSNR↑", ""]
+
+    lines += ["9. PRIOR RESULTS (APWeb-WAIM 2026, tag: apweb-v4-submitted)",
+              "   Method                     FID↓     SSIM    CLIP↑",
+              "   SDXL vanilla               368.06   0.1255  0.2888",
+              "   SDXL+LoRA+L_cultural       336.07   0.1113  0.3135",
+              "   → Sẽ được recompute trên split mới", ""]
+
+    lines += [sep, "END OF REPORT", sep]
+
+    report = "\n".join(lines)
     report_path = output_dir / "stats_report.txt"
-    report_path.write_text(report_text, encoding="utf-8")
-    print(report_text)
-    
+    report_path.write_text(report, encoding="utf-8")
+    print(report)
     print(f"\n  Report saved: {report_path}")
-    print(f"  Metadata saved: {meta_path}")
-    print(f"  Output directory: {output_dir}")
-    print(f"\nDone! Dataset ready for benchmark training.")
 
 
 # ============================================================================
-# CLI
+# MERGE MANIFEST → benchmark_manifest.csv
 # ============================================================================
-if __name__ == "__main__":
+def write_benchmark_manifest(train_df: pd.DataFrame, test_df: pd.DataFrame,
+                              base_dir: Path):
+    merged = pd.concat([train_df, test_df], ignore_index=True)
+    # Giữ các cột cần thiết, bỏ _img_path (internal)
+    cols = [c for c in merged.columns if c != "_img_path"]
+    out_path = base_dir / "benchmark_manifest.csv"
+    merged[cols].to_csv(out_path, index=False, encoding="utf-8-sig")
+    print(f"\n  benchmark_manifest.csv saved: {out_path}  ({len(merged)} rows)")
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+def main():
     parser = argparse.ArgumentParser(
-        description="Prepare ĐạiViệt-Pattern v1 dataset for Task 4.1 benchmark"
+        description="Prepare DaiViet-Pattern benchmark dataset from vector_extracted/"
     )
-    parser.add_argument(
-        "--base_dir",
-        type=str,
-        default=None,
-        help="Base directory of the daiviet-pattern repo. "
-             "Default: auto-detect (current dir or D:/Hoavandaiviet)"
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default=None,
-        help="Output directory. Default: <base_dir>/benchmark_data"
-    )
+    parser.add_argument("--base_dir",   default=None)
+    parser.add_argument("--output_dir", default=None)
     args = parser.parse_args()
-    
-    # Auto-detect base directory
+
+    # Auto-detect base_dir
     if args.base_dir:
         base_dir = Path(args.base_dir)
-    elif Path("dataset_manifest.csv").exists():
+    elif (Path(".") / "vector_extracted").exists():
         base_dir = Path(".")
-    elif Path("D:/Hoavandaiviet/dataset_manifest.csv").exists():
+    elif Path("D:/Hoavandaiviet/vector_extracted").exists():
         base_dir = Path("D:/Hoavandaiviet")
     else:
-        print("ERROR: Cannot find dataset_manifest.csv.")
-        print("Run from the repo root or pass --base_dir")
+        print("ERROR: Không tìm thấy vector_extracted/. "
+              "Chạy từ thư mục repo hoặc dùng --base_dir.")
         sys.exit(1)
-    
-    output_dir = Path(args.output_dir) if args.output_dir else base_dir / "benchmark_data"
-    
-    print(f"Base dir:   {base_dir.resolve()}")
-    print(f"Output dir: {output_dir.resolve()}")
-    print("")
-    
-    process_dataset(base_dir, output_dir)
+
+    output_dir = (Path(args.output_dir) if args.output_dir
+                  else base_dir / "benchmark_data")
+
+    print()
+    print("=" * 60)
+    print("  PREPARE BENCHMARK DATA — Task 4.1")
+    print("=" * 60)
+    print(f"  Base dir:   {base_dir.resolve()}")
+    print(f"  Output dir: {output_dir.resolve()}")
+    print()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Pipeline
+    df_raw   = load_manifests(base_dir)
+    n_raw    = len(df_raw)
+    df_clean = quality_check(df_raw)
+    n_missing = n_raw - len(df_clean)  # approximate (includes small)
+    n_corrupt = 0
+
+    train_df, test_df = split_dataset(df_clean)
+    process_images(train_df, test_df, output_dir)
+    write_baseline_prompts(output_dir)
+    metadata = write_metadata(df_clean, train_df, test_df, output_dir)
+    write_report(df_clean, train_df, test_df, metadata, output_dir,
+                 n_missing, n_corrupt)
+    write_benchmark_manifest(train_df, test_df, base_dir)
+
+    print(f"\n{'=' * 60}")
+    print("  XONG! Dataset sẵn sàng cho benchmark training.")
+    print(f"  Output: {output_dir.resolve()}")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
