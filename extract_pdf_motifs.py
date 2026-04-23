@@ -475,7 +475,8 @@ def main():
         excel_lookup = load_excel_metadata(args.excel)
 
     # Tìm PDFs
-    pdfs = sorted(input_dir.glob("*.pdf"))
+    # Lọc bỏ file macOS metadata (._xxx.pdf) — không phải PDF thật
+    pdfs = sorted(p for p in input_dir.glob("*.pdf") if not p.name.startswith("._"))
     if not pdfs:
         print(f"[ERROR] Không có file PDF nào trong: {input_dir}")
         sys.exit(1)
