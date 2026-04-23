@@ -54,9 +54,9 @@ except ImportError:
 # CONSTANTS
 # ============================================================================
 MIN_CELL_PX     = 100   # Pixel tối thiểu của mỗi chiều cell
-PADDING_PX      = 5     # Trim khỏi mép cell để bỏ đường kẻ grid
+PADDING_PX      = 3     # Trim khỏi mép cell để bỏ đường kẻ grid (chỉ dùng khi >1 cell)
 WHITE_THRESH    = 250   # Ngưỡng coi là "trắng" (0-255)
-WHITE_GAP_MIN   = 5     # Số pixel liên tiếp tối thiểu để coi là separator
+WHITE_GAP_MIN   = 20    # Số pixel liên tiếp tối thiểu để coi là separator (tăng để tránh false positives)
 MAX_ASPECT      = 4.0   # Nếu aspect ratio > 4:1 → strip rác, bỏ qua
 MIN_CONTENT     = 0.01  # Ít nhất 1% pixel không trắng → có nội dung
 
@@ -194,22 +194,34 @@ def render_pdf_page(pdf_path: Path, dpi: int = 300) -> Image.Image:
 # ============================================================================
 # GRID DETECTION — PROJECTION PROFILE
 # ============================================================================
-def _find_cell_ranges(profile: np.ndarray,
+def _find_cell_ranges(gray2d: np.ndarray,
+                      axis: int,
                       white_thresh: int = WHITE_THRESH,
                       min_gap: int = WHITE_GAP_MIN,
                       min_cell: int = MIN_CELL_PX) -> list[tuple[int, int]]:
     """
-    Tìm các vùng có nội dung (cell ranges) trong projection profile 1D.
+    Tìm các vùng có nội dung (cell ranges) dọc theo một trục.
 
-    profile: mảng 1D giá trị trung bình (0-255) theo từng hàng hoặc cột.
-    Separator = chuỗi liên tiếp các pixel có giá trị > white_thresh.
+    gray2d : mảng 2D grayscale float32 (H, W)
+    axis   : 0 → tìm separator theo chiều dọc (hàng), 1 → chiều ngang (cột)
 
-    Returns: [(start, end), ...] — tọa độ của từng cell band.
+    Điều kiện separator ĐÚNG:
+      - Dùng MIN per row/col (không phải mean): toàn bộ pixel trong hàng/cột
+        phải > white_thresh. Điều này đảm bảo chỉ những hàng/cột hoàn toàn
+        trắng mới được coi là separator — tránh false positive từ nội dung
+        thưa (sparse content) có mean cao nhưng vẫn có điểm đen.
+      - Phải có >= min_gap px liên tiếp → lọc nhiễu render 1-2px.
+
+    Returns: [(start, end), ...] — tọa độ của từng dải có nội dung.
     """
-    n = len(profile)
-    is_gap = profile > white_thresh
+    # MIN per row (axis=0) hoặc per col (axis=1)
+    # profile[i] = pixel tối nhất (darkest) trong hàng i hoặc cột i
+    # Nếu profile[i] > white_thresh → không có pixel tối nào → separator
+    profile_min = np.min(gray2d, axis=1 - axis)   # shape (H,) hoặc (W,)
+    n = len(profile_min)
+    is_gap = profile_min > white_thresh
 
-    # Tìm các khoảng gap (separator trắng)
+    # Tìm các run liên tiếp là gap
     gaps: list[tuple[int, int]] = []
     in_gap = False
     gap_start = 0
@@ -224,7 +236,7 @@ def _find_cell_ranges(profile: np.ndarray,
     if in_gap and n - gap_start >= min_gap:
         gaps.append((gap_start, n))
 
-    # Cell ranges = khoảng giữa các gap
+    # Cell ranges = khoảng nội dung giữa các gap
     ranges: list[tuple[int, int]] = []
     prev_end = 0
     for gs, ge in gaps:
@@ -244,25 +256,24 @@ def detect_grid_cells(img: Image.Image,
     """
     Phát hiện các cell hoa văn trong ảnh render từ PDF bằng projection profile.
 
+    Dùng MIN per row/col thay vì MEAN để tránh false separator detection
+    trong các motif đơn có nhiều khoảng trắng nội tại.
+
     Returns: [(x1, y1, x2, y2), ...] — tọa độ pixel từng cell.
     """
     arr = np.array(img)
     gray = np.mean(arr, axis=2).astype(np.float32)   # (H, W)
     H, W = gray.shape
 
-    # Profile theo chiều dọc (hàng) và ngang (cột)
-    h_profile = np.mean(gray, axis=1)   # (H,) — mỗi hàng cho một giá trị
-    v_profile = np.mean(gray, axis=0)   # (W,) — mỗi cột cho một giá trị
-
-    h_ranges = _find_cell_ranges(h_profile, min_cell=min_cell_px)
-    v_ranges = _find_cell_ranges(v_profile, min_cell=min_cell_px)
+    h_ranges = _find_cell_ranges(gray, axis=0, min_cell=min_cell_px)
+    v_ranges = _find_cell_ranges(gray, axis=1, min_cell=min_cell_px)
 
     cells: list[tuple[int, int, int, int]] = []
     for y1, y2 in h_ranges:
         for x1, x2 in v_ranges:
             cw, ch = x2 - x1, y2 - y1
 
-            # Lọc thin strip
+            # Lọc thin strip (aspect ratio quá lệch)
             aspect = max(cw, ch) / max(min(cw, ch), 1)
             if aspect > max_aspect:
                 continue
@@ -275,7 +286,7 @@ def detect_grid_cells(img: Image.Image,
 
             cells.append((x1, y1, x2, y2))
 
-    # Fallback: nếu không detect được grid → dùng bounding box của nội dung
+    # Fallback: không detect được grid → bounding box của nội dung tối
     if not cells:
         binary = gray < 200
         if np.any(binary):
@@ -383,12 +394,16 @@ def process_pdf(pdf_path: Path,
         file_id = re.sub(r"_ver_\d+.*$", "", pdf_stem, flags=re.IGNORECASE)
 
     rows: list[dict] = []
+    # Chỉ trim padding khi có nhiều cell (grid thật sự).
+    # Nếu chỉ 1 cell, không cắt để tránh mất viền motif.
+    pad = PADDING_PX if len(cells) > 1 else 0
+
     for idx, (x1, y1, x2, y2) in enumerate(cells):
         # Trim padding để bỏ đường kẻ grid
-        px1 = min(x1 + PADDING_PX, x2 - 1)
-        py1 = min(y1 + PADDING_PX, y2 - 1)
-        px2 = max(x2 - PADDING_PX, x1 + 1)
-        py2 = max(y2 - PADDING_PX, y1 + 1)
+        px1 = min(x1 + pad, x2 - 1)
+        py1 = min(y1 + pad, y2 - 1)
+        px2 = max(x2 - pad, x1 + 1)
+        py2 = max(y2 - pad, y1 + 1)
 
         if (px2 - px1) < 50 or (py2 - py1) < 50:
             continue
