@@ -10,6 +10,12 @@ wikimedia_raw/thumbnails/
 generated_samples/
 training_logs/
 
+# Vector source PDFs (heavy, not pushed)
+vector_source/
+
+# Extracted PNG output (re-generated from script)
+vector_extracted/
+
 # Large evaluation model (standard download)
 inception-2015-12-05.pt
 

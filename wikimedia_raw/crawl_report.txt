@@ -1,0 +1,29 @@
+============================================================
+WIKIMEDIA COMMONS CRAWL REPORT
+Date: 2026-04-22 14:47
+============================================================
+
+Total candidates found: 278
+After filtering (≥256px, ≤15MB): 203
+Downloaded successfully: 203
+Failed: 0
+
+Skip reasons:
+  small: 1
+  large: 1
+  wrong_type: 73
+  no_url: 0
+
+By suggested period:
+  Ly-Tran: 118
+  Nguyen: 85
+
+NEXT STEPS:
+  1. Open crawl_manifest.csv
+  2. Review images in thumbnails/ folder
+  3. For each image, fill in:
+     - period_confirmed: Ly-Tran / Nguyen / Le / Co-Dai / skip
+     - motif_type: geometric / floral / zoomorphic / cosmic / figural
+     - keep: yes / no
+  4. Run merge script to integrate into benchmark dataset
+============================================================
