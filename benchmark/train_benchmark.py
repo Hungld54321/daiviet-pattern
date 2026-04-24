@@ -230,7 +230,11 @@ class MotifDataset(Dataset):
 # ─────────────────────────────────────────────────────────────────────────────
 def encode_text_sdxl(captions, tokenizer_1, tokenizer_2,
                      text_encoder_1, text_encoder_2, device):
-    """Returns (encoder_hidden_states, pooled_prompt_embeds)."""
+    """Returns (encoder_hidden_states, pooled_prompt_embeds).
+
+    NOTE: No torch.no_grad() — gradients flow through TE LoRA parameters so
+    the text-encoder adapters are actually updated during training.
+    """
     tokens_1 = tokenizer_1(
         captions, padding="max_length", max_length=tokenizer_1.model_max_length,
         truncation=True, return_tensors="pt",
@@ -240,47 +244,57 @@ def encode_text_sdxl(captions, tokenizer_1, tokenizer_2,
         truncation=True, return_tensors="pt",
     ).input_ids.to(device)
 
-    with torch.no_grad():
-        out_1 = text_encoder_1(tokens_1, output_hidden_states=True)
-        hidden_1 = out_1.hidden_states[-2]          # (B, 77, 768)
+    out_1    = text_encoder_1(tokens_1, output_hidden_states=True)
+    hidden_1 = out_1.hidden_states[-2]          # (B, 77, 768)
 
-        out_2 = text_encoder_2(tokens_2, output_hidden_states=True)
-        hidden_2 = out_2.hidden_states[-2]          # (B, 77, 1280)
-        pooled   = out_2[0]                         # (B, 1280)
+    out_2    = text_encoder_2(tokens_2, output_hidden_states=True)
+    hidden_2 = out_2.hidden_states[-2]          # (B, 77, 1280)
+    pooled   = out_2[0]                         # (B, 1280)
 
     encoder_hidden_states = torch.cat([hidden_1, hidden_2], dim=-1)  # (B,77,2048)
     return encoder_hidden_states, pooled
 
 
 def encode_text_sd15(captions, tokenizer, text_encoder, device):
-    """Returns encoder_hidden_states for SD 1.5."""
+    """Returns encoder_hidden_states for SD 1.5.
+
+    NOTE: No torch.no_grad() — gradients flow through TE LoRA parameters.
+    """
     tokens = tokenizer(
         captions, padding="max_length", max_length=tokenizer.model_max_length,
         truncation=True, return_tensors="pt",
     ).input_ids.to(device)
-    with torch.no_grad():
-        return text_encoder(tokens)[0]
+    return text_encoder(tokens)[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model loading
 # ─────────────────────────────────────────────────────────────────────────────
 def load_model_sdxl(base: str, device):
+    """Load SDXL components.
+
+    dtype strategy (prevents NaN / fp16 overflow):
+      UNet + text encoders → fp16  (matching original SDXL training dtype)
+      VAE                  → fp32  (needed for stable M6 pixel-space decode)
+
+    LoRA adapter params are cast back to fp32 in train() after apply_lora(),
+    so base weights stay fp16 while the trainable deltas are fp32.
+    """
     print(f"  Loading SDXL components from {base} ...")
     tokenizer_1 = CLIPTokenizer.from_pretrained(base, subfolder="tokenizer")
     tokenizer_2 = CLIPTokenizerFast.from_pretrained(base, subfolder="tokenizer_2")
 
     text_encoder_1 = CLIPTextModel.from_pretrained(
-        base, subfolder="text_encoder", torch_dtype=torch.float32,
+        base, subfolder="text_encoder", torch_dtype=torch.float16,
     ).to(device)
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
-        base, subfolder="text_encoder_2", torch_dtype=torch.float32,
+        base, subfolder="text_encoder_2", torch_dtype=torch.float16,
     ).to(device)
     vae = AutoencoderKL.from_pretrained(
         base, subfolder="vae", torch_dtype=torch.float32,
     ).to(device)
     unet = UNet2DConditionModel.from_pretrained(
-        base, subfolder="unet", torch_dtype=torch.float32,
+        base, subfolder="unet", torch_dtype=torch.float16,
     ).to(device)
     noise_scheduler = DDPMScheduler.from_pretrained(base, subfolder="scheduler")
 
@@ -292,17 +306,17 @@ def load_model_sdxl(base: str, device):
 
 
 def load_model_sd15(base: str, device):
+    """Load SD 1.5 components (same fp16/fp32 strategy as SDXL)."""
     print(f"  Loading SD 1.5 components from {base} ...")
-    # SD 1.5 uses a single CLIP text encoder
     tokenizer = CLIPTokenizer.from_pretrained(base, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(
-        base, subfolder="text_encoder", torch_dtype=torch.float32,
+        base, subfolder="text_encoder", torch_dtype=torch.float16,
     ).to(device)
     vae = AutoencoderKL.from_pretrained(
         base, subfolder="vae", torch_dtype=torch.float32,
     ).to(device)
     unet = UNet2DConditionModel.from_pretrained(
-        base, subfolder="unet", torch_dtype=torch.float32,
+        base, subfolder="unet", torch_dtype=torch.float16,
     ).to(device)
     noise_scheduler = DDPMScheduler.from_pretrained(base, subfolder="scheduler")
 
@@ -344,7 +358,8 @@ def cosine_warmup_scheduler(optimizer, warmup_steps: int, total_steps: int):
 # ─────────────────────────────────────────────────────────────────────────────
 def train(model_name: str, cfg: dict,
           batch_size_override: int | None = None,
-          cultural_every: int = 1):
+          cultural_every: int = 1,
+          epochs_override: int | None = None):
     set_seed(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n{'='*60}")
@@ -360,6 +375,7 @@ def train(model_name: str, cfg: dict,
     batch_size      = batch_size_override if batch_size_override else cfg["batch_size"]
     lambda_cultural = cfg["lambda_cultural"]
     use_cultural    = lambda_cultural > 0.0
+    n_epochs        = epochs_override if epochs_override else EPOCHS
 
     if use_cultural:
         print(f"  Cultural loss: lambda={lambda_cultural}, "
@@ -404,6 +420,22 @@ def train(model_name: str, cfg: dict,
     else:
         text_encoder = apply_lora(text_encoder, TE_LORA_TARGETS)
 
+    # ── Cast LoRA adapter params to fp32 ─────────────────────────────────────
+    # Base model weights stay fp16 (saves VRAM, matches original SDXL dtype).
+    # LoRA A/B matrices are trained in fp32 for numerical stability — PEFT
+    # handles the dtype cast during the forward pass automatically.
+    def _cast_lora_to_fp32(model: nn.Module) -> None:
+        for name, param in model.named_parameters():
+            if param.requires_grad:          # only LoRA params are trainable
+                param.data = param.data.float()
+
+    _cast_lora_to_fp32(unet)
+    if model_type == "sdxl":
+        _cast_lora_to_fp32(text_encoder_1)
+        _cast_lora_to_fp32(text_encoder_2)
+    else:
+        _cast_lora_to_fp32(text_encoder)
+
     # ── Gradient checkpointing (saves VRAM) ──────────────────────────────────
     unet.enable_gradient_checkpointing()
 
@@ -425,9 +457,11 @@ def train(model_name: str, cfg: dict,
          "lr": cfg["lr_te"]},
     ], betas=(0.9, 0.999), weight_decay=1e-2, eps=1e-8)
 
-    total_steps = EPOCHS * len(dataloader)
+    total_steps = n_epochs * len(dataloader)
     scheduler   = cosine_warmup_scheduler(optimizer, WARMUP_STEPS, total_steps)
-    scaler      = torch.cuda.amp.GradScaler()   # fp16 mixed precision
+    # GradScaler scales gradients for the fp16 forward pass.
+    # LoRA params (fp32) pass through unscaled; scaler.unscale_() handles both.
+    scaler      = torch.amp.GradScaler("cuda")
 
     # ── VGG extractor for M6 ──────────────────────────────────────────────────
     vgg_extractor = VGGFeatureExtractor(device) if use_cultural else None
@@ -440,7 +474,7 @@ def train(model_name: str, cfg: dict,
                          "loss_total", "lr"])
 
     # ── Save training config ──────────────────────────────────────────────────
-    config_to_save = {**cfg, "epochs": EPOCHS, "lora_rank": LORA_RANK,
+    config_to_save = {**cfg, "epochs": n_epochs, "lora_rank": LORA_RANK,
                       "lora_alpha": LORA_ALPHA, "seed": SEED,
                       "warmup_steps": WARMUP_STEPS,
                       "batch_size_actual": batch_size,
@@ -453,7 +487,7 @@ def train(model_name: str, cfg: dict,
     global_step = 0
     t_start     = time.time()
 
-    for epoch in range(1, EPOCHS + 1):
+    for epoch in range(1, n_epochs + 1):
         unet.train()
         if model_type == "sdxl":
             text_encoder_1.train()
@@ -465,15 +499,17 @@ def train(model_name: str, cfg: dict,
         epoch_loss_cult = 0.0
         n_steps = 0
 
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{EPOCHS}", leave=False)
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{n_epochs}", leave=False)
         for batch in pbar:
             images   = batch["image"].to(device)
             captions = batch["caption"]
 
-            # ── VAE encode → latents ─────────────────────────────────────────
-            with torch.no_grad(), torch.cuda.amp.autocast():
-                latents = vae.encode(images).latent_dist.sample()
+            # ── VAE encode → latents (fp32 VAE, no grad needed) ──────────────
+            with torch.no_grad():
+                # Images arrive as fp16 from dataloader pin_memory; VAE is fp32
+                latents = vae.encode(images.float()).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
+                latents = latents.to(dtype=torch.float16)   # match UNet dtype
 
             # ── Add noise ────────────────────────────────────────────────────
             noise     = torch.randn_like(latents)
@@ -483,18 +519,19 @@ def train(model_name: str, cfg: dict,
             )
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-            # ── Text encoding ─────────────────────────────────────────────────
-            with torch.cuda.amp.autocast():
+            # ── Text encoding + UNet forward (autocast for fp16 base weights) ─
+            # torch.amp.autocast lets fp16 base weights run natively while fp32
+            # LoRA params are cast to fp16 for the matmul then accumulated in fp32.
+            with torch.amp.autocast("cuda"):
                 if model_type == "sdxl":
                     enc_hidden, pooled = encode_text_sdxl(
                         list(captions), tokenizer_1, tokenizer_2,
                         text_encoder_1, text_encoder_2, device,
                     )
-                    # SDXL added conditioning
                     bs = latents.shape[0]
                     time_ids = torch.tensor(
                         [[resolution, resolution, 0, 0, resolution, resolution]],
-                        dtype=torch.float32, device=device,
+                        dtype=torch.float16, device=device,
                     ).repeat(bs, 1)
                     added_cond = {"time_ids": time_ids, "text_embeds": pooled}
                 else:
@@ -537,7 +574,7 @@ def train(model_name: str, cfg: dict,
                 ref_pixels_batch = batch["ref_image"].to(device)
                 cult_losses: list[torch.Tensor] = []
                 for i in range(pred_x0_latent.shape[0]):
-                    with torch.cuda.amp.autocast(enabled=False):
+                    with torch.amp.autocast("cuda", enabled=False):
                         pred_pix_i = vae.decode(
                             pred_x0_latent[i : i + 1].float()
                         ).sample.clamp(-1.0, 1.0)
@@ -548,6 +585,13 @@ def train(model_name: str, cfg: dict,
                 loss_cult = torch.stack(cult_losses).mean()
 
             loss_total = loss_diff + lambda_cultural * loss_cult
+
+            # ── NaN / Inf guard ───────────────────────────────────────────────
+            if not torch.isfinite(loss_total):
+                print(f"\n  [WARN] step {global_step}: loss={loss_total.item():.4f} "
+                      f"(diff={loss_diff.item():.4f}) — skipping batch")
+                global_step += 1
+                continue
 
             # ── Backward ─────────────────────────────────────────────────────
             optimizer.zero_grad(set_to_none=True)
@@ -584,13 +628,13 @@ def train(model_name: str, cfg: dict,
         avg_diff = epoch_loss_diff / max(n_steps, 1)
         avg_cult = epoch_loss_cult / max(n_steps, 1)
         elapsed  = (time.time() - t_start) / 60
-        print(f"  Epoch {epoch:>2}/{EPOCHS}  "
+        print(f"  Epoch {epoch:>2}/{n_epochs}  "
               f"loss_diff={avg_diff:.5f}  "
               f"loss_cult={avg_cult:.5f}  "
               f"elapsed={elapsed:.1f}min")
 
         # ── Checkpoint ───────────────────────────────────────────────────────
-        if epoch % SAVE_EVERY == 0 or epoch == EPOCHS:
+        if epoch % SAVE_EVERY == 0 or epoch == n_epochs:
             ckpt_dir = out_dir / f"epoch_{epoch:03d}"
             ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -659,6 +703,10 @@ def main():
             "Use 4 or 8 to reduce VAE decode overhead while still guiding training."
         ),
     )
+    parser.add_argument(
+        "--epochs", type=int, default=None,
+        help="Override number of training epochs (default: 50). Use 3 for quick test.",
+    )
     args = parser.parse_args()
 
     if args.model not in MODEL_CONFIGS:
@@ -669,7 +717,8 @@ def main():
     try:
         train(args.model, cfg,
               batch_size_override=args.batch_size,
-              cultural_every=args.cultural_every)
+              cultural_every=args.cultural_every,
+              epochs_override=args.epochs)
     except Exception as e:
         print(f"\n[ERROR] Training {args.model} failed: {e}", file=sys.stderr)
         import traceback; traceback.print_exc()
