@@ -24,11 +24,20 @@ import torch
 from tqdm import tqdm
 
 from diffusers import (
-    DiffusionPipeline,
     StableDiffusionPipeline,
     StableDiffusionXLPipeline,
+    UNet2DConditionModel,
 )
+from diffusers.loaders import AttnProcsLayers
+from peft import LoraConfig, get_peft_model
 from safetensors.torch import load_file
+from transformers import CLIPTextModel, CLIPTextModelWithProjection
+
+# LoRA config — must match train_benchmark.py
+LORA_RANK         = 16
+LORA_ALPHA        = 32
+UNET_LORA_TARGETS = ["to_q", "to_k", "to_v", "to_out.0"]
+TE_LORA_TARGETS   = ["q_proj", "k_proj", "v_proj", "out_proj"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 REPO_ROOT      = Path(__file__).resolve().parent.parent
@@ -134,15 +143,58 @@ def load_baseline_prompts() -> dict | None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline loading
 # ─────────────────────────────────────────────────────────────────────────────
+def _load_lora_into_module(module: torch.nn.Module,
+                            target_modules: list[str],
+                            weights_path: Path,
+                            label: str = "") -> torch.nn.Module:
+    """Apply PEFT LoRA structure to `module`, load saved weights, merge and unload.
+
+    Strategy (avoids dtype mismatch between fp16 pipeline and fp32 saved weights):
+      1. Convert module to fp32 (PEFT initialises LoRA layers in model dtype)
+      2. Wrap with get_peft_model (LoraConfig matching train_benchmark.py)
+      3. Load saved PEFT-format state dict (strict=False — only LoRA keys)
+      4. merge_and_unload() → bake LoRA into base weights, drop PEFT wrapper
+      5. Cast back to fp16 for inference
+
+    Returns the merged fp16 module (no PEFT overhead during inference).
+    """
+    lora_cfg = LoraConfig(
+        r=LORA_RANK, lora_alpha=LORA_ALPHA,
+        target_modules=target_modules,
+        lora_dropout=0.0, bias="none",
+    )
+    module_fp32 = module.float()                          # step 1
+    peft_module = get_peft_model(module_fp32, lora_cfg)  # step 2
+
+    state_dict  = load_file(weights_path)                # step 3 — fp32 tensors
+    missing, unexpected = peft_module.load_state_dict(state_dict, strict=False)
+    if unexpected:
+        print(f"  [WARN] {label}: {len(unexpected)} unexpected keys ignored")
+
+    merged = peft_module.merge_and_unload()              # step 4
+    return merged.half()                                 # step 5
+
+
 def load_pipeline(model_name: str, cfg: dict, device: torch.device):
-    """Load diffusion pipeline and optionally inject LoRA weights."""
+    """Load diffusion pipeline with optional PEFT-compatible LoRA injection.
+
+    For LoRA models (M2, M3, M6):
+      - Loads UNet and text encoders in fp32
+      - Applies PEFT LoRA structure (same config as training)
+      - Loads PEFT-format state dict from checkpoint
+      - merge_and_unload() → baked weights, no PEFT overhead
+      - Casts back to fp16
+
+    This is fully compatible with the PEFT state dicts saved by train_benchmark.py.
+    """
     base        = cfg["base"]
     model_type  = cfg["model_type"]
-    lora_path   = cfg.get("lora_path")
-    resolution  = cfg["resolution"]
+    lora_path   = cfg.get("lora_path")         # Path | None
+    ckpt_dir    = Path(lora_path).parent if lora_path else None
 
     print(f"  Loading base model: {base}")
 
+    # ── Base pipeline (fp16 for VRAM efficiency on M1 / as starting point) ──
     if model_type == "sdxl":
         pipe = StableDiffusionXLPipeline.from_pretrained(
             base,
@@ -157,7 +209,7 @@ def load_pipeline(model_name: str, cfg: dict, device: torch.device):
             use_safetensors=True,
         ).to(device)
 
-    # Memory optimisations
+    # ── Memory optimisations ─────────────────────────────────────────────────
     pipe.enable_attention_slicing()
     if hasattr(pipe, "enable_xformers_memory_efficient_attention"):
         try:
@@ -166,17 +218,44 @@ def load_pipeline(model_name: str, cfg: dict, device: torch.device):
         except Exception:
             pass
 
-    # ── Inject LoRA weights ──────────────────────────────────────────────────
+    # ── Inject LoRA weights (PEFT-compatible, merge for clean inference) ──────
     if lora_path is not None:
         if not Path(lora_path).exists():
             raise FileNotFoundError(
                 f"LoRA checkpoint not found for {model_name}: {lora_path}\n"
                 f"Run: python benchmark/train_benchmark.py --model {model_name}"
             )
-        print(f"  Loading LoRA weights from {lora_path}")
-        # Load LoRA weights into UNet via diffusers load_lora_weights
-        pipe.load_lora_weights(str(lora_path.parent), weight_name=lora_path.name)
-        print(f"  LoRA weights loaded")
+
+        # UNet LoRA
+        print(f"  Injecting UNet LoRA: {Path(lora_path).name}")
+        pipe.unet = _load_lora_into_module(
+            pipe.unet, UNET_LORA_TARGETS, Path(lora_path), label="UNet"
+        ).to(device)
+
+        # Text-encoder LoRA (optional — loaded if files present in checkpoint dir)
+        if model_type == "sdxl":
+            te1_path = ckpt_dir / "te1_lora_weights.safetensors"
+            te2_path = ckpt_dir / "te2_lora_weights.safetensors"
+            if te1_path.exists():
+                print(f"  Injecting TE-1 LoRA: {te1_path.name}")
+                pipe.text_encoder = _load_lora_into_module(
+                    pipe.text_encoder, TE_LORA_TARGETS, te1_path, label="TE-1"
+                ).to(device)
+            if te2_path.exists():
+                print(f"  Injecting TE-2 LoRA: {te2_path.name}")
+                pipe.text_encoder_2 = _load_lora_into_module(
+                    pipe.text_encoder_2, TE_LORA_TARGETS, te2_path, label="TE-2"
+                ).to(device)
+        else:
+            te_path = ckpt_dir / "te_lora_weights.safetensors"
+            if te_path.exists():
+                print(f"  Injecting TE LoRA: {te_path.name}")
+                pipe.text_encoder = _load_lora_into_module(
+                    pipe.text_encoder, TE_LORA_TARGETS, te_path, label="TE"
+                ).to(device)
+
+        torch.cuda.empty_cache()
+        print(f"  LoRA merged and unloaded — clean inference model ready")
 
     pipe.unet.eval()
     pipe.set_progress_bar_config(disable=True)

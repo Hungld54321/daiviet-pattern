@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 from PIL import Image
 from tqdm import tqdm
@@ -37,6 +38,9 @@ RESULTS_DIR = REPO_ROOT / "benchmark" / "results"
 # Test-set ground-truth images for comparison
 TEST_DIR_768 = REPO_ROOT / "benchmark_data" / "768" / "D_all" / "test" / "images"
 TEST_DIR_512 = REPO_ROOT / "benchmark_data" / "512" / "D_all" / "test" / "images"
+
+# benchmark_manifest.csv — source of truth for period ↔ filename mapping
+MANIFEST_CSV = REPO_ROOT / "benchmark_manifest.csv"
 
 PERIODS = ["Ly-Tran", "Le", "Nguyen"]
 PERIOD_TRIGGERS = {
@@ -78,18 +82,65 @@ def _build_eval_prompt(model_name: str, period: str) -> str:
             "high quality, detailed")
 
 
+def _load_manifest() -> pd.DataFrame | None:
+    """Load benchmark_manifest.csv once. Returns DataFrame or None on error."""
+    if not MANIFEST_CSV.exists():
+        print(f"  [WARN] benchmark_manifest.csv not found at {MANIFEST_CSV}")
+        return None
+    try:
+        df = pd.read_csv(MANIFEST_CSV, encoding="utf-8")
+        return df
+    except Exception as e:
+        print(f"  [WARN] Could not read benchmark_manifest.csv: {e}")
+        return None
+
+
+# Module-level cache — loaded on first call to _get_test_images_for_period()
+_MANIFEST_DF: pd.DataFrame | None = None
+
+
 def _get_test_images_for_period(period: str, resolution: int) -> list[Path]:
-    """Return test images belonging to a given period (detect from filename stem)."""
+    """Return test-split images for a given period.
+
+    Uses benchmark_manifest.csv (ground-truth mapping) so the result is exact,
+    independent of filename patterns.  Falls back to glob-based detection only
+    if the manifest is unavailable.
+    """
+    global _MANIFEST_DF
     test_dir = TEST_DIR_768 if resolution >= 768 else TEST_DIR_512
-    period_code = {
+
+    # ── Manifest-based lookup (preferred) ────────────────────────────────────
+    if _MANIFEST_DF is None:
+        _MANIFEST_DF = _load_manifest()
+
+    if _MANIFEST_DF is not None:
+        mask = (
+            (_MANIFEST_DF["period"] == period) &
+            (_MANIFEST_DF["split"]  == "test")
+        )
+        filenames = _MANIFEST_DF.loc[mask, "filename"].tolist()
+        paths = []
+        for fn in filenames:
+            p = test_dir / fn
+            if p.exists():
+                paths.append(p)
+            else:
+                # benchmark_data may not be populated — silently skip
+                pass
+        if paths:
+            return sorted(paths)
+        # If manifest matched but no files found on disk, fall through to glob
+
+    # ── Fallback: glob-based heuristic (less reliable) ───────────────────────
+    print(f"  [WARN] Falling back to glob-based period detection for {period}")
+    period_stems = {
         "Ly-Tran": ["LYTRAN", "LT"],
         "Le":      ["LTH"],
         "Nguyen":  ["NGN"],
     }.get(period, [])
     all_imgs = sorted(test_dir.glob("*.png"))
     matched  = [p for p in all_imgs
-                if any(code in p.stem.upper() for code in period_code)]
-    # Fallback: return all test images if no period-specific match
+                if any(code in p.stem.upper() for code in period_stems)]
     return matched if matched else all_imgs
 
 

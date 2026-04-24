@@ -342,7 +342,9 @@ def cosine_warmup_scheduler(optimizer, warmup_steps: int, total_steps: int):
 # ─────────────────────────────────────────────────────────────────────────────
 # Training function
 # ─────────────────────────────────────────────────────────────────────────────
-def train(model_name: str, cfg: dict):
+def train(model_name: str, cfg: dict,
+          batch_size_override: int | None = None,
+          cultural_every: int = 1):
     set_seed(SEED)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n{'='*60}")
@@ -352,11 +354,17 @@ def train(model_name: str, cfg: dict):
     out_dir = CHECKPOINT_DIR / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    model_type     = cfg["model_type"]
-    resolution     = cfg["resolution"]
-    batch_size     = cfg["batch_size"]
+    model_type      = cfg["model_type"]
+    resolution      = cfg["resolution"]
+    # --batch_size overrides config default (useful for M6 VRAM management)
+    batch_size      = batch_size_override if batch_size_override else cfg["batch_size"]
     lambda_cultural = cfg["lambda_cultural"]
-    use_cultural   = lambda_cultural > 0.0
+    use_cultural    = lambda_cultural > 0.0
+
+    if use_cultural:
+        print(f"  Cultural loss: lambda={lambda_cultural}, "
+              f"every={cultural_every} step(s), "
+              f"VAE decode per-sample (saves VRAM)")
 
     # ── Dataset ───────────────────────────────────────────────────────────────
     data_dir = REPO_ROOT / cfg["data_dir"]
@@ -434,7 +442,9 @@ def train(model_name: str, cfg: dict):
     # ── Save training config ──────────────────────────────────────────────────
     config_to_save = {**cfg, "epochs": EPOCHS, "lora_rank": LORA_RANK,
                       "lora_alpha": LORA_ALPHA, "seed": SEED,
-                      "warmup_steps": WARMUP_STEPS}
+                      "warmup_steps": WARMUP_STEPS,
+                      "batch_size_actual": batch_size,
+                      "cultural_every": cultural_every}
     (out_dir / "training_config.json").write_text(
         json.dumps(config_to_save, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -512,21 +522,30 @@ def train(model_name: str, cfg: dict):
 
             # ── Cultural loss (M6 only) ───────────────────────────────────────
             loss_cult = torch.tensor(0.0, device=device)
-            if use_cultural:
-                # Predict x0 from epsilon prediction
+            if use_cultural and (global_step % cultural_every == 0):
+                # Predict x0 from epsilon prediction for each sample
                 alphas_cumprod = noise_scheduler.alphas_cumprod.to(device)
                 a_t  = alphas_cumprod[timesteps].sqrt()[:, None, None, None]
                 s_t  = (1 - alphas_cumprod[timesteps]).sqrt()[:, None, None, None]
                 pred_x0_latent = (noisy_latents - s_t * model_pred) / a_t.clamp(min=1e-8)
                 pred_x0_latent = pred_x0_latent / vae.config.scaling_factor
 
-                # Decode to pixel space  (fp32 for VAE stability)
-                with torch.cuda.amp.autocast(enabled=False):
-                    pred_pixels = vae.decode(pred_x0_latent.float()).sample
-                    pred_pixels = pred_pixels.clamp(-1, 1)
-
-                ref_pixels = batch["ref_image"].to(device)
-                loss_cult  = cultural_loss(pred_pixels, ref_pixels, vgg_extractor)
+                # Decode per-sample to limit peak VRAM.
+                # VAE decode of a full batch at 768px is expensive; looping over
+                # individual samples keeps only one frame's activations in memory
+                # at a time while still back-propagating through model_pred.
+                ref_pixels_batch = batch["ref_image"].to(device)
+                cult_losses: list[torch.Tensor] = []
+                for i in range(pred_x0_latent.shape[0]):
+                    with torch.cuda.amp.autocast(enabled=False):
+                        pred_pix_i = vae.decode(
+                            pred_x0_latent[i : i + 1].float()
+                        ).sample.clamp(-1.0, 1.0)
+                    ref_pix_i = ref_pixels_batch[i : i + 1]
+                    cult_losses.append(
+                        cultural_loss(pred_pix_i, ref_pix_i, vgg_extractor)
+                    )
+                loss_cult = torch.stack(cult_losses).mean()
 
             loss_total = loss_diff + lambda_cultural * loss_cult
 
@@ -596,10 +615,23 @@ def train(model_name: str, cfg: dict):
             print(f"    Checkpoint saved → {ckpt_dir}")
 
     # ── Final save (best = last epoch) ───────────────────────────────────────
+    # UNet LoRA — loaded by generate_benchmark.py (PEFT-compatible keys)
     final_unet_lora = {k: v for k, v in unet.state_dict().items()
                        if "lora" in k}
     save_file(final_unet_lora, out_dir / "pytorch_lora_weights.safetensors")
-    print(f"  Final LoRA weights saved → {out_dir / 'pytorch_lora_weights.safetensors'}")
+    print(f"  UNet LoRA saved  → {out_dir / 'pytorch_lora_weights.safetensors'}")
+
+    # Text-encoder LoRA — also saved at root level for generate to pick up
+    if model_type == "sdxl":
+        te1 = {k: v for k, v in text_encoder_1.state_dict().items() if "lora" in k}
+        te2 = {k: v for k, v in text_encoder_2.state_dict().items() if "lora" in k}
+        save_file(te1, out_dir / "te1_lora_weights.safetensors")
+        save_file(te2, out_dir / "te2_lora_weights.safetensors")
+        print(f"  TE LoRA saved    → te1_lora_weights.safetensors, te2_lora_weights.safetensors")
+    else:
+        te = {k: v for k, v in text_encoder.state_dict().items() if "lora" in k}
+        save_file(te, out_dir / "te_lora_weights.safetensors")
+        print(f"  TE LoRA saved    → te_lora_weights.safetensors")
 
     log_file.close()
     vram_gb = torch.cuda.max_memory_allocated() / 1e9
@@ -616,6 +648,17 @@ def main():
     )
     parser.add_argument("--model", choices=["M2", "M3", "M6"], required=True,
                         help="Model to train")
+    parser.add_argument(
+        "--batch_size", type=int, default=None,
+        help="Override config batch size (e.g. use 2 for M6 to save VRAM)",
+    )
+    parser.add_argument(
+        "--cultural_every", type=int, default=1,
+        help=(
+            "M6 only: compute cultural loss every N steps (default=1). "
+            "Use 4 or 8 to reduce VAE decode overhead while still guiding training."
+        ),
+    )
     args = parser.parse_args()
 
     if args.model not in MODEL_CONFIGS:
@@ -624,7 +667,9 @@ def main():
 
     cfg = MODEL_CONFIGS[args.model]
     try:
-        train(args.model, cfg)
+        train(args.model, cfg,
+              batch_size_override=args.batch_size,
+              cultural_every=args.cultural_every)
     except Exception as e:
         print(f"\n[ERROR] Training {args.model} failed: {e}", file=sys.stderr)
         import traceback; traceback.print_exc()
