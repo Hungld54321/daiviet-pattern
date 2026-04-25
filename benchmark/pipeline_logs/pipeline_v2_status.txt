@@ -1,0 +1,3 @@
+﻿[02:07:54] PIPELINE v2 START
+[02:07:54] STEP 1/3: Training M6 v2 (30 epochs, gradient-enabled cultural loss)...
+[02:08:43] ERROR: M6 training failed (exit 1).

@@ -24,6 +24,7 @@ import torch
 from tqdm import tqdm
 
 from diffusers import (
+    AutoencoderKL,
     StableDiffusionPipeline,
     StableDiffusionXLPipeline,
     UNet2DConditionModel,
@@ -196,8 +197,20 @@ def load_pipeline(model_name: str, cfg: dict, device: torch.device):
 
     # ── Base pipeline (fp16 for VRAM efficiency on M1 / as starting point) ──
     if model_type == "sdxl":
+        # SDXL VAE overflows in fp16 → NaN → tiny black images.
+        # Fix: load VAE in fp32, then patch vae.decode() to cast fp16 latents
+        # to fp32 before they hit the fp32 conv weights.  diffusers' upcast_vae
+        # flag (deprecated) did exactly this cast; we replicate it manually.
+        vae_fp32 = AutoencoderKL.from_pretrained(
+            base, subfolder="vae", torch_dtype=torch.float32,
+        ).to(device)
+        _orig_vae_decode = vae_fp32.decode
+        vae_fp32.decode = (
+            lambda z, *a, **kw: _orig_vae_decode(z.to(torch.float32), *a, **kw)
+        )
         pipe = StableDiffusionXLPipeline.from_pretrained(
             base,
+            vae=vae_fp32,
             torch_dtype=torch.float16,
             use_safetensors=True,
             variant="fp16",
@@ -311,18 +324,19 @@ def generate_for_model(model_name: str, cfg: dict, device: torch.device):
             generator = torch.Generator(device=device).manual_seed(seed)
             t0 = time.time()
 
-            with torch.inference_mode(), torch.cuda.amp.autocast():
-                if cfg["model_type"] == "sdxl":
-                    image = pipe(
-                        prompt=prompt,
-                        negative_prompt=NEGATIVE_PROMPT,
-                        num_inference_steps=INFERENCE_STEPS,
-                        guidance_scale=GUIDANCE_SCALE,
-                        width=resolution,
-                        height=resolution,
-                        generator=generator,
-                    ).images[0]
+            # SDXL: NO autocast — pipeline loads fp16 UNet + fp32 VAE internally;
+            # torch.cuda.amp.autocast() would cast the fp32 VAE back to fp16,
+            # causing NaN overflow and saving tiny black images.
+            # SD 1.5: autocast is safe (no fp16 overflow risk at 512px).
+            _autocast = (cfg["model_type"] != "sdxl")
+            with torch.inference_mode():
+                if _autocast:
+                    import contextlib
+                    _amp_ctx = torch.amp.autocast("cuda")
                 else:
+                    import contextlib
+                    _amp_ctx = contextlib.nullcontext()
+                with _amp_ctx:
                     image = pipe(
                         prompt=prompt,
                         negative_prompt=NEGATIVE_PROMPT,

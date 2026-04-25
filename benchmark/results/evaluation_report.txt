@@ -1,0 +1,46 @@
+========================================================================
+  DAIVIET-PATTERN BENCHMARK — EVALUATION REPORT
+  Task 4.1  |  DaiViet-Pattern v2.0
+========================================================================
+
+NOTE: FID computed on N=50 images per period (indicative, denoted FID50).
+      SSIM / LPIPS / PSNR use nearest-reference proxy (unpaired setting).
+
+------------------------------------------------------------------------
+  OVERALL (macro-average over 3 periods)
+------------------------------------------------------------------------
+  Model       FID50     CLIP     SSIM    LPIPS     PSNR  InfTime(s)
+  ------------------------------------------------------------
+  M1         357.99   0.2718   0.0763   0.7482     5.51        4.46
+  M2         349.76   0.2510   0.1422   0.7480     5.27        4.45
+  M3         371.80   0.2290   0.0687   0.6980     6.51        2.45
+  M6         344.16   0.2576   0.1623   0.7417     5.32        4.46
+
+------------------------------------------------------------------------
+  PER-PERIOD BREAKDOWN
+------------------------------------------------------------------------
+  Model     Period        FID50     CLIP     SSIM    LPIPS     PSNR
+  ------------------------------------------------------------
+  M1        Ly-Tran      341.03   0.2727   0.0935   0.6461     4.20
+  M1        Le           383.46   0.2690   0.0230   0.7636     6.07
+  M1        Nguyen       349.48   0.2737   0.1123   0.8348     6.27
+  M2        Ly-Tran      345.00   0.2479   0.1532   0.6378     3.84
+  M2        Le           375.94   0.2573   0.0284   0.7734     5.39
+  M2        Nguyen       328.35   0.2479   0.2450   0.8329     6.57
+  M3        Ly-Tran      388.54   0.2197   0.0859   0.6126     5.15
+  M3        Le           366.28   0.2333   0.0214   0.7165     6.54
+  M3        Nguyen       360.57   0.2341   0.0988   0.7648     7.83
+  M6        Ly-Tran      339.62   0.2364   0.1844   0.6341     4.23
+  M6        Le           370.67   0.2789   0.0336   0.7748     5.68
+  M6        Nguyen       322.19   0.2574   0.2690   0.8163     6.05
+
+------------------------------------------------------------------------
+  METRIC DEFINITIONS
+------------------------------------------------------------------------
+  FID50    : Frechet Inception Distance (lower=better). N=50, indicative.
+  CLIP     : CLIP ViT-L/14 image-text cosine sim (higher=better).
+  SSIM     : Structural Similarity Index (higher=better).
+  LPIPS    : Learned Perceptual Image Patch Similarity (lower=better).
+  PSNR     : Peak Signal-to-Noise Ratio in dB (higher=better).
+  InfTime  : Average inference time per image in seconds.
+========================================================================

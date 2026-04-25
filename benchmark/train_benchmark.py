@@ -119,21 +119,22 @@ def set_seed(seed: int):
 # VGG-16 feature extractor (conv3_3, layer index 14, after ReLU = index 15)
 # ─────────────────────────────────────────────────────────────────────────────
 class VGGFeatureExtractor(nn.Module):
-    """Extract features at VGG-16 conv3_3 (after ReLU, feature map 256ch)."""
+    """Extract features at VGG-16 conv3_3 (after ReLU, feature map 256ch).
 
-    def __init__(self, device):
+    Lives on CPU; caller must .to(device) before use and .to('cpu') after
+    to avoid holding ~500 MB of GPU VRAM between cultural steps.
+    """
+
+    def __init__(self):
         super().__init__()
         vgg = vgg16(weights=VGG16_Weights.IMAGENET1K_V1).features
         # layers 0-15 inclusive: up to and including ReLU after conv3_3
         self.features = nn.Sequential(*list(vgg.children())[:16])
         for p in self.parameters():
             p.requires_grad_(False)
-        self.to(device)
-        # ImageNet normalisation
-        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406],
-                                                   device=device).view(1, 3, 1, 1))
-        self.register_buffer("std",  torch.tensor([0.229, 0.224, 0.225],
-                                                   device=device).view(1, 3, 1, 1))
+        # Buffers on CPU; move with the module when .to(device) is called
+        self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer("std",  torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x in [-1, 1] → [0, 1] → ImageNet norm
@@ -387,7 +388,7 @@ def train(model_name: str, cfg: dict,
     if not data_dir.exists():
         raise FileNotFoundError(f"Dataset not found: {data_dir}")
 
-    dataset    = MotifDataset(data_dir, resolution, with_ref=use_cultural)
+    dataset    = MotifDataset(data_dir, resolution, with_ref=False)
     dataloader = DataLoader(
         dataset, batch_size=batch_size, shuffle=True,
         num_workers=0, pin_memory=True, drop_last=True,
@@ -437,6 +438,9 @@ def train(model_name: str, cfg: dict,
         _cast_lora_to_fp32(text_encoder)
 
     # ── Gradient checkpointing (saves VRAM) ──────────────────────────────────
+    # Reduces peak activation memory during backward by ~50% at the cost of
+    # ~30% slower backward pass (activations are recomputed rather than stored).
+    # LoRA params already require_grad so gradient flow is unaffected.
     unet.enable_gradient_checkpointing()
 
     # Freeze VAE (always)
@@ -464,7 +468,9 @@ def train(model_name: str, cfg: dict,
     scaler      = torch.amp.GradScaler("cuda")
 
     # ── VGG extractor for M6 ──────────────────────────────────────────────────
-    vgg_extractor = VGGFeatureExtractor(device) if use_cultural else None
+    # M6 now uses latent-space Gram-matrix cultural loss (no pixel-space VGG
+    # decode needed).  VGGFeatureExtractor kept in module for reference only.
+    vgg_extractor = None
 
     # ── CSV logger ────────────────────────────────────────────────────────────
     log_path = out_dir / "training_log.csv"
@@ -557,32 +563,35 @@ def train(model_name: str, cfg: dict,
 
             loss_diff = F.mse_loss(model_pred.float(), target.float())
 
-            # ── Cultural loss (M6 only) ───────────────────────────────────────
+            # ── Cultural loss (M6 only) — latent-space Gram matrix ───────────
+            # Gradient path: model_pred → pred_x0_latent → gram_matrix → loss_cult
+            # No VAE decode or VGG in the backward path → zero VRAM overhead.
+            # Reference latents encoded with no_grad (fixed target, not trained).
             loss_cult = torch.tensor(0.0, device=device)
             if use_cultural and (global_step % cultural_every == 0):
-                # Predict x0 from epsilon prediction for each sample
                 alphas_cumprod = noise_scheduler.alphas_cumprod.to(device)
                 a_t  = alphas_cumprod[timesteps].sqrt()[:, None, None, None]
                 s_t  = (1 - alphas_cumprod[timesteps]).sqrt()[:, None, None, None]
+                # pred_x0_latent retains grad from model_pred
                 pred_x0_latent = (noisy_latents - s_t * model_pred) / a_t.clamp(min=1e-8)
-                pred_x0_latent = pred_x0_latent / vae.config.scaling_factor
 
-                # Decode per-sample to limit peak VRAM.
-                # VAE decode of a full batch at 768px is expensive; looping over
-                # individual samples keeps only one frame's activations in memory
-                # at a time while still back-propagating through model_pred.
-                ref_pixels_batch = batch["ref_image"].to(device)
-                cult_losses: list[torch.Tensor] = []
-                for i in range(pred_x0_latent.shape[0]):
-                    with torch.amp.autocast("cuda", enabled=False):
-                        pred_pix_i = vae.decode(
-                            pred_x0_latent[i : i + 1].float()
-                        ).sample.clamp(-1.0, 1.0)
-                    ref_pix_i = ref_pixels_batch[i : i + 1]
-                    cult_losses.append(
-                        cultural_loss(pred_pix_i, ref_pix_i, vgg_extractor)
-                    )
-                loss_cult = torch.stack(cult_losses).mean()
+                # Reference: same-period images encoded to latent (no_grad)
+                batch_periods = batch["period"]
+                ref_indices = [
+                    random.choice(dataset.period_to_indices.get(p, [0]))
+                    for p in batch_periods
+                ]
+                ref_pixels = torch.stack(
+                    [dataset[i]["image"] for i in ref_indices]
+                ).to(device)
+                with torch.no_grad():
+                    ref_latents = vae.encode(ref_pixels.float()).latent_dist.sample()
+                    ref_latents = ref_latents * vae.config.scaling_factor
+
+                # Gram-matrix style loss in latent space
+                pred_gram = gram_matrix(pred_x0_latent)
+                ref_gram  = gram_matrix(ref_latents.detach())
+                loss_cult = F.mse_loss(pred_gram, ref_gram)
 
             loss_total = loss_diff + lambda_cultural * loss_cult
 

@@ -1,0 +1,17 @@
+{
+  "base": "stabilityai/stable-diffusion-xl-base-1.0",
+  "model_type": "sdxl",
+  "resolution": 768,
+  "batch_size": 4,
+  "lr_unet": 0.0001,
+  "lr_te": 1e-05,
+  "data_dir": "benchmark_data/768/D_all/train",
+  "lambda_cultural": 0.0,
+  "epochs": 50,
+  "lora_rank": 16,
+  "lora_alpha": 32,
+  "seed": 42,
+  "warmup_steps": 100,
+  "batch_size_actual": 2,
+  "cultural_every": 1
+}
