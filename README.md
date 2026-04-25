@@ -1,28 +1,34 @@
 # DaiViet-Pattern Benchmark — Task 4.1
 
-Comparative evaluation of four generative models for Vietnamese ornamental pattern synthesis, submitted as part of the **APWeb-WAIM 2026** paper on culturally-conditioned diffusion models for historical Dai Viet art.
+Comparative evaluation of four generative models for Vietnamese ornamental pattern (*hoa văn*) synthesis, using a curated dataset of vector motifs extracted from the *Hoa Văn Đại Việt* publication series.
 
 ---
 
 ## Overview
 
-This benchmark compares four Stable Diffusion variants (M1–M3, M6) on the task of generating Vietnamese ornamental motifs (*hoa văn*) across three historical dynasties: **Lý-Trần**, **Lê**, and **Nguyễn**. The primary research question is whether period-aware cultural conditioning (M6) measurably improves generation fidelity over standard LoRA fine-tuning (M2) and vanilla SDXL (M1).
+This benchmark compares four Stable Diffusion variants (M1, M2, M3, M6) on the task of generating Vietnamese ornamental motifs across three historical dynasties: **Lý-Trần**, **Lê**, and **Nguyễn**. The central question is whether period-aware cultural conditioning (M6) measurably improves generation fidelity over standard LoRA fine-tuning (M2) and vanilla SDXL (M1).
+
+The full pipeline runs end-to-end: PDF vector source → motif extraction → benchmark dataset → training → generation → evaluation.
 
 ---
 
 ## Dataset
 
+The dataset is built exclusively from **200 PDF vector files** published by the *Hoa Văn Đại Việt* project (collaboration between Đại Việt Cổ Phong and Comicola). Each file contains ornamental patterns hand-drawn by professional illustrators from original museum artifacts and historical records — not photographs or web-scraped images.
+
 | Property | Detail |
 |---|---|
-| **Source** | 200 PDF vector files — *Hoa Văn Đại Việt* project (Đại Việt Cổ Phong × Comicola) |
-| **Extraction** | 291 individual motifs extracted via adaptive grid detection |
-| **Periods** | Lý-Trần: 50 · Lê: 94 · Nguyễn: 147 |
+| **Source** | 200 PDF vector files — *Hoa Văn Đại Việt* (Đại Việt Cổ Phong × Comicola) |
+| **Content** | Patterns hand-drawn by professional illustrators from museum artifacts |
+| **Extraction method** | Adaptive grid detection (`extract_pdf_motifs.py`) |
+| **Total motifs** | 291 individual motifs |
+| **Periods** | Lý-Trần: 50 &nbsp;·&nbsp; Lê: 94 &nbsp;·&nbsp; Nguyễn: 147 |
 | **Train / Test split** | 232 train / 59 test (stratified by period, `seed=42`) |
-| **Test references** | Lý-Trần: 10 · Lê: 19 · Nguyễn: 30 |
-| **Metadata** | Excel annotations per file: artist, description, historical source |
-| **Image format** | PNG, 768 × 768 px (SDXL models) · 512 × 512 px (SD 1.5) |
+| **Test references** | Lý-Trần: 10 &nbsp;·&nbsp; Lê: 19 &nbsp;·&nbsp; Nguyễn: 30 |
+| **Metadata** | Excel annotations per file: motif ID, artist, description, historical source |
+| **Image format** | PNG, 768 × 768 px (SDXL models) &nbsp;·&nbsp; 512 × 512 px (SD 1.5) |
 
-Extraction script: `extract_pdf_motifs.py` · Dataset preparation: `prepare_benchmark_data.py`
+Each motif is accompanied by structured Excel metadata maintained by the project team, including provenance (dynasty, artifact type, museum reference) and artist attribution.
 
 ---
 
@@ -30,14 +36,14 @@ Extraction script: `extract_pdf_motifs.py` · Dataset preparation: `prepare_benc
 
 | ID | Base Model | Fine-tuning | Key Config | Epochs |
 |---|---|---|---|---|
-| **M1** | SDXL 1.0 | None (control group) | vanilla inference, no trigger word | — |
+| **M1** | SDXL 1.0 | None (control group) | Vanilla inference, no trigger word | — |
 | **M2** | SDXL 1.0 | LoRA | rank=16, α=32, lr_unet=1e-4, lr_te=1e-5 | 50 |
 | **M3** | SD 1.5 | LoRA | rank=16, α=32, lr_unet=1e-4, lr_te=1e-5 | 50 |
 | **M6** | SDXL 1.0 | LoRA + Cultural Loss | rank=16, α=32; latent Gram matrix, λ=0.3, every=16 steps | 30 |
 
-**M6 cultural loss** — computes a Gram matrix style loss in latent space between the predicted clean latent (`pred_x0`) and a same-period reference latent sampled per batch. Gradient flows through the UNet prediction without requiring VAE decoding, keeping peak VRAM at 11.7 GB on an RTX 4080.
+**M6 cultural loss** computes a Gram matrix style loss in latent space between the predicted clean latent (`pred_x0`) and a same-period reference latent sampled per batch. Gradient flows directly through the UNet prediction without VAE decoding, keeping peak VRAM at 11.7 GB on an RTX 4080.
 
-All models generate 50 images per period (150 total) using fixed seeds 0–49, prompt engineering with period-specific trigger words, and identical inference settings (30 DDIM steps, CFG=7.5, resolution per model class).
+All models generate 50 images per period (150 total) using fixed seeds 0–49, period-specific trigger words, and identical inference settings (30 DDIM steps, CFG=7.5, resolution per model class).
 
 ---
 
@@ -69,19 +75,19 @@ All models generate 50 images per period (150 total) using fixed seeds 0–49, p
 | M1 | Nguyễn | 349.48 | **0.2737** | 0.1123 | 0.8348 | 6.27 |
 | M3 | Nguyễn | 360.57 | 0.2341 | 0.0988 | 0.7648 | **7.83** |
 
-> **Metric notes:** FID50 computed on N=50 generated images vs. held-out test references using Fréchet Inception Distance. SSIM / LPIPS / PSNR use nearest-reference proxy matching (unpaired setting). CLIP = cosine similarity with CLIP ViT-L/14 embeddings.
+> **Metric definitions:** FID50 — Fréchet Inception Distance on N=50 generated images (lower = better). CLIP — cosine similarity with CLIP ViT-L/14 embeddings (higher = better). SSIM — Structural Similarity Index (higher = better). LPIPS — Learned Perceptual Image Patch Similarity, VGG (lower = better). PSNR — Peak Signal-to-Noise Ratio in dB (higher = better). SSIM / LPIPS / PSNR use nearest-reference proxy matching (unpaired setting).
 
 ---
 
 ## Key Findings
 
-- **M6 achieves the best FID50 (344.16) and SSIM (0.1623)**, outperforming the plain LoRA baseline (M2) and the vanilla SDXL control (M1) on both distributional and structural fidelity metrics. This supports the hypothesis that latent-space cultural conditioning improves period-specific generation quality.
+- **M6 achieves the best FID50 (344.16) and SSIM (0.1623)**, outperforming both the plain LoRA baseline (M2) and the vanilla SDXL control (M1). Latent-space cultural conditioning consistently improves period-specific structural fidelity across all three dynasties.
 
-- **Cultural conditioning yields a measurable SSIM gain over vanilla LoRA**: M6 (+14.1% SSIM vs. M2) and a FID50 reduction of 1.6 points, achieved with 40% fewer training epochs (30 vs. 50) and a peak VRAM of only 11.7 GB.
+- **Cultural conditioning is efficient**: M6 outperforms M2 with 40% fewer training epochs (30 vs. 50), a SSIM gain of +14.1%, and a FID50 reduction of 5.6 points, while staying within 11.7 GB peak VRAM on an RTX 4080.
 
-- **SD 1.5 (M3) is 1.82× faster at inference** (2.45 s vs. 4.46 s for SDXL) but produces the lowest CLIP score (0.229) and SSIM (0.069). The lower 512 px resolution likely limits structural detail for Vietnamese ornamental patterns.
+- **SD 1.5 (M3) is 1.82× faster at inference** (2.45 s vs. 4.46 s for SDXL) but produces the lowest CLIP score (0.229) and SSIM (0.069). The 512 px resolution appears insufficient for capturing fine structural detail in Vietnamese ornamental patterns.
 
-- **Vanilla SDXL (M1) scores highest on CLIP (0.2718)** — reflecting strong text-to-image alignment from pretraining — but its SSIM (0.076) and FID50 (357.99) are worse than all LoRA-fine-tuned variants, confirming that domain-specific fine-tuning is essential for period-accurate motif synthesis.
+- **Vanilla SDXL (M1) scores highest on CLIP (0.2718)** — reflecting strong general text-to-image alignment — but its SSIM (0.076) and FID50 (357.99) trail all fine-tuned variants, confirming that domain-specific fine-tuning on the vector dataset is essential for period-accurate synthesis.
 
 ---
 
@@ -90,48 +96,43 @@ All models generate 50 images per period (150 total) using fixed seeds 0–49, p
 ```
 DaiViet-Pattern/
 │
-├── extract_pdf_motifs.py         # PDF → PNG motif extraction (grid detection)
-├── prepare_benchmark_data.py     # Train/test split, resolution resize, manifests
-├── crawl_wikimedia.py            # Wikimedia Commons supplementary image crawler
+├── extract_pdf_motifs.py         # PDF → PNG motif extraction (adaptive grid detection)
+├── prepare_benchmark_data.py     # Train/test split, resolution resize, manifest generation
+├── crawl_wikimedia.py            # Supplementary image crawler (not part of benchmark dataset)
 │
-├── dataset_manifest.csv          # Full dataset inventory (all 291 motifs)
+├── dataset_manifest.csv          # Full dataset inventory (all 291 motifs + metadata)
 ├── benchmark_manifest.csv        # Train/test split manifest (seed=42)
 │
 ├── vector_extracted/
-│   ├── ly_tran/extract_manifest.csv   # Per-file extraction metadata, Lý-Trần
-│   ├── le/extract_manifest.csv        # Per-file extraction metadata, Lê
-│   └── nguyen/extract_manifest.csv    # Per-file extraction metadata, Nguyễn
-│
-├── wikimedia_data/
-│   └── wikimedia_manifest.csv    # Crawled supplementary images manifest
-├── wikimedia_raw/
-│   └── crawl_manifest.csv        # Raw crawl log
+│   ├── ly_tran/extract_manifest.csv   # Extraction log: Lý-Trần (50 motifs, 45 source PDFs)
+│   ├── le/extract_manifest.csv        # Extraction log: Lê (94 motifs, 85 source PDFs)
+│   └── nguyen/extract_manifest.csv    # Extraction log: Nguyễn (147 motifs, 70 source PDFs)
 │
 └── benchmark/
-    ├── train_benchmark.py        # Training loop (M2, M3, M6) — LoRA + cultural loss
-    ├── generate_benchmark.py     # Image generation (all models, 50 seeds × 3 periods)
-    ├── evaluate_benchmark.py     # FID50 / CLIP / SSIM / LPIPS / PSNR evaluation
+    ├── train_benchmark.py        # Training loop — LoRA (M2/M3) and LoRA+cultural loss (M6)
+    ├── generate_benchmark.py     # Image generation — 50 seeds × 3 periods × 4 models
+    ├── evaluate_benchmark.py     # Evaluation — FID50 / CLIP / SSIM / LPIPS / PSNR
     ├── run_full_benchmark.py     # End-to-end pipeline orchestrator
-    ├── README.md                 # Benchmark-specific quick-start notes
+    ├── README.md                 # Quick-start notes
     │
     ├── checkpoints/
     │   ├── M2/
-    │   │   ├── pytorch_lora_weights.safetensors   # [ignored — large]
+    │   │   ├── pytorch_lora_weights.safetensors   # [gitignored — large binary]
     │   │   ├── training_log.csv                   # Step-level loss log (6,250 rows)
-    │   │   └── training_config.json               # Hyperparameter record
-    │   ├── M3/  (same structure)
-    │   └── M6/  (same structure, + loss_cultural column)
+    │   │   └── training_config.json               # Full hyperparameter record
+    │   ├── M3/                                    # Same structure as M2
+    │   └── M6/                                    # Same structure + loss_cultural column
     │
     ├── results/
-    │   ├── evaluation_report.txt   # Human-readable evaluation report
-    │   ├── metrics_overall.csv     # Overall metrics table (machine-readable)
-    │   └── metrics_per_period.csv  # Per-period breakdown
+    │   ├── evaluation_report.txt   # Human-readable full evaluation report
+    │   ├── metrics_overall.csv     # Overall metrics (machine-readable)
+    │   └── metrics_per_period.csv  # Per-period breakdown (machine-readable)
     │
     └── pipeline_logs/
-        └── pipeline_v4_status.txt  # Timestamped pipeline execution log
+        └── pipeline_v4_status.txt  # Timestamped execution log (TRAIN → GEN → EVAL)
 ```
 
-> **Note:** `*.safetensors` model weights, raw PDF source files (`vector_source/`), extracted PNGs (`vector_extracted/*.png`), and generated images (`benchmark/generated/`) are excluded from this repository (see `.gitignore`). These can be regenerated using the reproduction steps below.
+> **Not tracked in this repository:** `*.safetensors` model weights, raw PDF source files (`vector_source/`), extracted PNG images (`vector_extracted/*.png`), and generated benchmark images (`benchmark/generated/`). All can be regenerated from the steps below.
 
 ---
 
@@ -140,40 +141,39 @@ DaiViet-Pattern/
 ### Prerequisites
 
 ```bash
-# Python 3.10+, CUDA 11.8+ recommended
+# Python 3.10+, CUDA 11.8+
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 pip install diffusers==0.27.2 transformers peft safetensors accelerate
 pip install cleanfid open-clip-torch scikit-image lpips
 pip install tqdm pandas openpyxl pdf2image pillow
 ```
 
-**Hardware:** NVIDIA RTX 4080 16 GB (or equivalent ≥ 12 GB VRAM for M6). M3 can run on ≥ 8 GB VRAM.
+**Hardware:** NVIDIA RTX 4080 16 GB (or equivalent ≥ 12 GB VRAM). M3 (SD 1.5) runs on ≥ 8 GB VRAM.
 
-### Step 1 — Place source PDFs
+### Step 1 — Place PDF source files
 
 ```
-vector_source/45_hoavanlytran/     ← Lý-Trần PDFs
-vector_source/85_hoavanle/         ← Lê PDFs
-vector_source/70_hoa_van_nguyen/   ← Nguyễn PDFs
-vector_source/excel_metadata/      ← Excel annotation files
+vector_source/45_hoavanlytran/     ← Lý-Trần PDFs (45 files)
+vector_source/85_hoavanle/         ← Lê PDFs (85 files)
+vector_source/70_hoa_van_nguyen/   ← Nguyễn PDFs (70 files)
+vector_source/excel_metadata/      ← Excel annotation files (3 workbooks)
 ```
+
+Source files are provided separately by the *Hoa Văn Đại Việt* project team.
 
 ### Step 2 — Extract motifs from PDFs
 
 ```bash
-# Lý-Trần (45 files → 50 motifs)
 python extract_pdf_motifs.py \
   --input_dir vector_source/45_hoavanlytran \
   --excel "vector_source/excel_metadata/45 Hoa Văn Lý Trần_v04.xlsx" \
   --period Ly-Tran --output_dir vector_extracted/ly_tran
 
-# Lê (85 files → 94 motifs)
 python extract_pdf_motifs.py \
   --input_dir vector_source/85_hoavanle \
   --excel "vector_source/excel_metadata/85 Hoa Văn Thời Lê.xlsx" \
   --period Le --output_dir vector_extracted/le
 
-# Nguyễn (70 files → 147 motifs)
 python extract_pdf_motifs.py \
   --input_dir vector_source/70_hoa_van_nguyen \
   --excel "vector_source/excel_metadata/70 Hoa Văn Thời Nguyễn_ver_03.xlsx" \
@@ -184,20 +184,21 @@ python extract_pdf_motifs.py \
 
 ```bash
 python prepare_benchmark_data.py
-# Outputs: benchmark_data/768/D_all/{train,test}/ and benchmark_data/512/D_all/{train,test}/
-# Also writes: dataset_manifest.csv, benchmark_manifest.csv
+# → benchmark_data/768/D_all/{train,test}/   (SDXL resolution)
+# → benchmark_data/512/D_all/{train,test}/   (SD 1.5 resolution)
+# → dataset_manifest.csv, benchmark_manifest.csv
 ```
 
 ### Step 4 — Run full benchmark pipeline
 
 ```bash
-# All models end-to-end (train M2, M3, M6 → generate all → evaluate all)
+# End-to-end: train M2/M3/M6 → generate all → evaluate all
 python benchmark/run_full_benchmark.py
 
-# Or individually:
-python benchmark/train_benchmark.py   --model M2
-python benchmark/train_benchmark.py   --model M3
-python benchmark/train_benchmark.py   --model M6
+# Or step by step:
+python benchmark/train_benchmark.py    --model M2
+python benchmark/train_benchmark.py    --model M3
+python benchmark/train_benchmark.py    --model M6
 python benchmark/generate_benchmark.py --model all
 python benchmark/evaluate_benchmark.py --model all
 ```
@@ -208,21 +209,16 @@ Results are written to `benchmark/results/`.
 
 ## Limitations
 
-- **FID50 is indicative only.** Standard FID uses N=50,000 samples; N=50 per period produces a noisier estimate with higher variance. Results should be interpreted directionally, not as absolute distributional scores.
+- **FID50 is indicative only.** Standard FID uses N=50,000 samples; N=50 per period produces higher-variance estimates. Results should be interpreted directionally rather than as precise distributional scores.
 
-- **SSIM / LPIPS are unpaired proxies.** Generated images are matched to the nearest test reference by filename ordering; there is no semantic pairing between generated and reference motifs. These metrics reflect structural plausibility relative to real motifs rather than pixel-level reconstruction accuracy.
+- **SSIM / LPIPS / PSNR are unpaired proxies.** Generated images are matched to held-out test references by period, not by semantic content. These metrics reflect structural plausibility relative to real motifs rather than pixel-level reconstruction.
 
-- **Cultural loss operates in latent space**, using Gram matrix similarity between predicted clean latents and same-period reference latents. This is a practical approximation of VGG-based perceptual style loss (which was infeasible at 768 px SDXL resolution due to VRAM constraints) and may capture different style dimensions.
+- **Cultural loss operates in latent space.** M6's Gram matrix loss is computed on predicted clean latents rather than on decoded pixel-space features (VGG perceptual loss), due to the VRAM cost of backpropagating through the SDXL VAE decoder at 768 px. The latent Gram matrix captures a different (lower-level) notion of style similarity than pixel-space VGG features.
 
-- **Small dataset.** 291 motifs across 3 periods is a constrained training set for generative modelling. LoRA fine-tuning mitigates this by preserving the SDXL prior, but generated diversity may be limited.
+- **Small dataset.** 291 motifs across 3 periods is a constrained training set for generative modelling. LoRA fine-tuning mitigates overfitting by preserving the pretrained SDXL prior, but generated diversity may be limited compared to larger domain datasets.
 
 ---
 
 ## Branch Information
 
-| Branch | Contents |
-|---|---|
-| `benchmark` | This repository — scripts, training logs, evaluation results, manifests |
-| `main` | APWeb-WAIM 2026 paper submission code (tag: `apweb-v4-submitted`) |
-
-> For questions on the methodology or training setup, refer to `benchmark/results/evaluation_report.txt` and the per-model `training_config.json` files in `benchmark/checkpoints/`.
+This is the `benchmark` branch. The `main` branch contains separate work.
